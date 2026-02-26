@@ -1,0 +1,5 @@
+{
+  "name": "Cartera",
+  "description": "A high-end financial reconciliation dashboard that connects to Siigo API data, processes bank statements, and generates detailed aging and payment status reports.",
+  "requestFramePermissions": []
+}
