@@ -19,6 +19,7 @@ import DashboardStats from './components/DashboardStats';
 import ReportTable from './components/ReportTable';
 import ManualInvoiceModal from './components/ManualInvoiceModal';
 import ReconciliationPanel from './components/ReconciliationPanel';
+import PortfolioSummary from './components/PortfolioSummary';
 import { MOCK_BANK_TRANSACTIONS, MOCK_INVOICES } from './constants';
 import { Invoice, FinancialStats, AIAuditFinding } from './types';
 import { siigoService } from './services/siigoService';
@@ -120,6 +121,24 @@ const normalizeStatusKey = (value?: string) => {
   return 'Pendiente por pagar';
 };
 
+const normalizeDigits = (value?: string) =>
+  String(value || '').replace(/[^\d]/g, '').trim();
+
+const getClientDisplayName = (invoice: Invoice) => {
+  const clientName = String(invoice.clientName || '').trim();
+  const normalizedClientDigits = normalizeDigits(clientName);
+  const normalizedDocumentDigits = normalizeDigits(invoice.documentNumber);
+
+  if (!clientName) return 'CLIENTE NO IDENTIFICADO';
+  if (/^\d{6,}$/.test(normalizedClientDigits)) {
+    if (normalizedDocumentDigits && normalizedClientDigits === normalizedDocumentDigits) {
+      return 'CLIENTE NO IDENTIFICADO';
+    }
+    return 'CLIENTE NO IDENTIFICADO';
+  }
+  return clientName;
+};
+
 
 const getStoredDeletedInvoiceNumbers = () => {
   if (typeof window === 'undefined') return [];
@@ -157,7 +176,7 @@ const App: React.FC = () => {
   const [selectedMonth, setSelectedMonth] = useState<string>('all');
   const [selectedClient, setSelectedClient] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
-  const [activeView, setActiveView] = useState<'cartera' | 'conciliacion'>('cartera');
+  const [activeView, setActiveView] = useState<'cartera' | 'conciliacion' | 'resumen'>('cartera');
   const [auditFindings] = useState<AIAuditFinding[]>([]);
   const [bankTransactions, setBankTransactions] = useState(MOCK_BANK_TRANSACTIONS);
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
@@ -614,12 +633,54 @@ const App: React.FC = () => {
     return { totalInvoices, totalInvoiced, totalCollected, totalPending, totalOverdue, averageMoraDays: 0 };
   }, [filteredInvoices]);
 
+  const portfolioSummaryGroups = useMemo(() => {
+    const pendingInvoices = filteredInvoices.filter(
+      (invoice) => normalizeStatusKey(invoice.status) === 'Pendiente por pagar' && Number(invoice.debtValue || 0) > 0
+    );
+
+    const groups = pendingInvoices.reduce<Record<string, {
+      clientName: string;
+      invoices: Invoice[];
+      totalSubtotal: number;
+      totalIva: number;
+      totalAmount: number;
+      totalDebt: number;
+    }>>((acc, invoice) => {
+      const clientName = getClientDisplayName(invoice);
+      const currentGroup = acc[clientName] || {
+        clientName,
+        invoices: [],
+        totalSubtotal: 0,
+        totalIva: 0,
+        totalAmount: 0,
+        totalDebt: 0,
+      };
+
+      currentGroup.invoices.push(invoice);
+      currentGroup.totalSubtotal += Number(invoice.subtotal || 0);
+      currentGroup.totalIva += Number(invoice.iva || 0);
+      currentGroup.totalAmount += Number(invoice.total || 0);
+      currentGroup.totalDebt += Number(invoice.debtValue || 0);
+      acc[clientName] = currentGroup;
+      return acc;
+    }, {});
+
+    return Object.values(groups)
+      .map((group) => ({
+        ...group,
+        invoices: group.invoices.sort(
+          (a, b) => new Date(b.date || '1900-01-01').getTime() - new Date(a.date || '1900-01-01').getTime()
+        ),
+      }))
+      .sort((a, b) => b.totalDebt - a.totalDebt || a.clientName.localeCompare(b.clientName, 'es-CO'));
+  }, [filteredInvoices]);
+
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
 
   useEffect(() => {
-    if (!canModifyInvoices && activeView !== 'cartera') {
+    if (!canModifyInvoices && activeView === 'conciliacion') {
       setActiveView('cartera');
     }
   }, [activeView, canModifyInvoices]);
@@ -744,7 +805,7 @@ const App: React.FC = () => {
               </button>
             )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <div className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2">
               <Calendar size={12} className="text-slate-400" />
               <select className="bg-transparent border-none outline-none text-[10px] font-black text-slate-500 uppercase" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
@@ -763,6 +824,18 @@ const App: React.FC = () => {
                 {statuses.map((s) => <option key={s.value} value={s.value}>{s.label}</option>)}
               </select>
             </div>
+            <button
+              type="button"
+              onClick={() => setActiveView(activeView === 'resumen' ? 'cartera' : 'resumen')}
+              className={`border rounded-lg px-4 py-2 flex items-center gap-2 text-[10px] font-black uppercase transition-colors ${
+                activeView === 'resumen'
+                  ? 'bg-slate-900 border-slate-900 text-white'
+                  : 'bg-slate-50 border-slate-100 text-slate-500 hover:bg-slate-100'
+              }`}
+            >
+              <LayoutDashboard size={12} className={activeView === 'resumen' ? 'text-slate-200' : 'text-slate-400'} />
+              <span>Resumen de Cartera</span>
+            </button>
           </div>
         </header>
 
@@ -782,6 +855,8 @@ const App: React.FC = () => {
                   canEdit={canModifyInvoices}
                 />
               </>
+            ) : activeView === 'resumen' ? (
+              <PortfolioSummary groups={portfolioSummaryGroups} />
             ) : (
               <ReconciliationPanel
                 invoices={invoices}
