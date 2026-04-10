@@ -283,6 +283,10 @@ const App: React.FC = () => {
   }, [invoices]);
 
   const loadInitialData = useCallback(async () => {
+    if (!currentUser) {
+      setInvoices([]);
+      return;
+    }
     setIsSyncing(true);
     setCloudStatus('syncing');
     try {
@@ -301,7 +305,7 @@ const App: React.FC = () => {
     } finally {
       setIsSyncing(false);
     }
-  }, [deletedInvoiceNumbersSet]);
+  }, [currentUser, deletedInvoiceNumbersSet]);
 
   const syncNewInvoices = useCallback(async () => {
     if (!requireAdminAccess()) return;
