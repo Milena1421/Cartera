@@ -26,15 +26,27 @@ const formatCurrency = (value?: number) => {
 
 const formatDate = (value?: string) => {
   if (!value) return '-';
-  const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-  const date = new Date(normalized);
-  if (Number.isNaN(date.getTime())) return value;
+  const trimmed = String(value).trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return `${day}/${month}/${year}`;
+  }
 
-  return new Intl.DateTimeFormat('es-CO', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  }).format(date);
+  const localMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (localMatch) {
+    const [, day, month, year] = localMatch;
+    return `${day}/${month}/${year}`;
+  }
+
+  const normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
+  const date = new Date(normalized);
+  if (Number.isNaN(date.getTime())) return trimmed;
+
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear());
+  return `${day}/${month}/${year}`;
 };
 
 const PortfolioSummary: React.FC<Props> = ({ groups }) => {
