@@ -1,9 +1,11 @@
+export type PaymentStatus = 'Pagada' | 'Nota cr�dito' | 'Nota crédito' | 'Nota cr?dito' | 'Pendiente por pagar';
 
-export type PaymentStatus = 'Pagada' | 'Nota crédito' | 'Pendiente por pagar';
 
 export interface Invoice {
   id: string;
   clientName: string;
+  documentType?: string;
+  documentNumber?: string;
   invoiceNumber: string;
   description: string;
   date: string;
@@ -40,6 +42,7 @@ export interface BankTransaction {
 }
 
 export interface FinancialStats {
+  totalInvoices: number;
   totalInvoiced: number;
   totalCollected: number;
   totalPending: number;
@@ -56,3 +59,7 @@ export interface AIAuditFinding {
   confidenceScore?: number; // 0 to 100
   suggestedUpdate?: Partial<Invoice>;
 }
+
+
+
+

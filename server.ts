@@ -1,14 +1,21 @@
 import express from 'express';
 import cors from 'cors';
 import axios from 'axios';
-import { createServer as createViteServer } from 'vite';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 async function startServer() {
   const app = express();
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
+  const rootDir = path.dirname(fileURLToPath(import.meta.url));
+  const distDir = path.join(rootDir, 'dist');
 
   app.use(express.json());
   app.use(cors()); // Enable CORS for all routes for now
+
+  app.get('/healthz', (_req, res) => {
+    res.status(200).json({ ok: true });
+  });
 
   // Siigo API Proxy
   app.post('/api/siigo', async (req, res) => {
@@ -52,6 +59,7 @@ async function startServer() {
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -59,9 +67,9 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
-    app.use(express.static('dist'));
+    app.use(express.static(distDir));
     app.get('*', (req, res) => {
-      res.sendFile('dist/index.html', { root: '.' });
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 

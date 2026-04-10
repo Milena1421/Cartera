@@ -1,13 +1,12 @@
 
 import { Invoice, PaymentStatus } from '../types';
 
-const SIIGO_BASE_URL = 'https://api.siigo.com/v1';
+const SIIGO_BASE_URL = String(import.meta.env.VITE_SIIGO_API_URL || 'https://api.siigo.com/v1').trim();
 const AUTH_URL = 'https://api.siigo.com/auth';
 
-const SIIGO_USERNAME = 'gerencia@ingenieria365.com';
-const SIIGO_ACCESS_KEY = 'YzUzZWM3NWMtN2ZmMC00MGEzLThkMWEtNzZiNDMyZDBiMGYxOjRHLmZrRktvME8=';
+const SIIGO_USERNAME = String(import.meta.env.VITE_SIIGO_USERNAME || '').trim();
+const SIIGO_ACCESS_KEY = String(import.meta.env.VITE_SIIGO_ACCESS_KEY || '').trim();
 const PARTNER_ID = 'Ingenieria365'; 
-
 export class SiigoService {
   private token: string | null = null;
 
@@ -19,6 +18,9 @@ export class SiigoService {
   private async authenticate(): Promise<string> {
     if (this.token) return this.token;
     try {
+      if (!SIIGO_USERNAME || !SIIGO_ACCESS_KEY) {
+        throw new Error('Credenciales de Siigo no configuradas.');
+      }
       const response = await fetch(this.withProxy(AUTH_URL, false), {
         method: 'POST',
         headers: {
@@ -58,6 +60,20 @@ export class SiigoService {
     return cleaned.replace(/\s+/g, ' ').trim().toUpperCase();
   }
 
+  private isIdentifierOnly(value: string): boolean {
+    const normalized = String(value || '')
+      .toUpperCase()
+      .replace(/^(NIT|CC|ID|CEDULA|IDENTIFICACION)[:.\s-]*/i, '')
+      .replace(/[.\s-]/g, '')
+      .trim();
+
+    return /^\d{6,}$/.test(normalized);
+  }
+
+  private normalizeDocumentNumber(value?: string): string {
+    return String(value || '').replace(/[^\d]/g, '').trim();
+  }
+
   private extractCustomerName(cust: any): string {
     if (!cust) return '';
     
@@ -82,6 +98,46 @@ export class SiigoService {
     }
 
     return name.trim();
+  }
+
+  private resolveClientName(realClientName: string, customer: any): string {
+    const primary = this.cleanClientName(realClientName);
+    if (primary && !this.isIdentifierOnly(primary) && primary !== 'CLIENTE NO IDENTIFICADO') {
+      return primary;
+    }
+
+    const fallback = this.extractCustomerName(customer);
+    const cleanedFallback = this.cleanClientName(fallback);
+    if (cleanedFallback && !this.isIdentifierOnly(cleanedFallback) && cleanedFallback !== 'CLIENTE NO IDENTIFICADO') {
+      return cleanedFallback;
+    }
+
+    return 'CLIENTE NO IDENTIFICADO';
+  }
+
+  private resolveDocumentInfo(customer: any, fallbackClientName: string): { documentType: string; documentNumber: string } {
+    const customerTypeRaw = String(
+      customer?.identification_object?.type ||
+      customer?.identification_type ||
+      customer?.document_type ||
+      ''
+    ).toUpperCase().trim();
+
+    const rawNumber = String(customer?.identification || '').trim();
+    const normalizedFallback = String(fallbackClientName || '').replace(/[.\s-]/g, '');
+    const fallbackNumber = /^\d{6,}$/.test(normalizedFallback) ? normalizedFallback : '';
+    const documentNumber = rawNumber || fallbackNumber;
+
+    let documentType = '';
+    if (customerTypeRaw.includes('NIT') || customerTypeRaw === '31') documentType = 'NIT';
+    else if (customerTypeRaw.includes('CC') || customerTypeRaw === '13') documentType = 'CC';
+    else if (customerTypeRaw.includes('CE') || customerTypeRaw === '22') documentType = 'CE';
+    else if (customerTypeRaw.includes('TI') || customerTypeRaw === '12') documentType = 'TI';
+    else if (customerTypeRaw.includes('PAS')) documentType = 'PASAPORTE';
+    else if (documentNumber) documentType = 'NIT';
+    else documentType = 'NO DEFINIDO';
+
+    return { documentType, documentNumber };
   }
 
   async getInvoices(startDate?: string, endDate?: string): Promise<{invoices: Invoice[], raw: any[]}> {
@@ -117,7 +173,7 @@ export class SiigoService {
 
       const mapped = allResults.map((inv) => {
         const rawName = this.extractCustomerName(inv.customer);
-        return this.mapToInternalInvoice(inv, rawName);
+        return this.mapToInternalInvoice(inv, rawName, inv.customer);
       });
 
       return { invoices: mapped, raw: allResults };
@@ -127,23 +183,65 @@ export class SiigoService {
     }
   }
 
-  private mapToInternalInvoice(siigo: any, realClientName: string): Invoice {
+  private mapToInternalInvoice(siigo: any, realClientName: string, customer: any): Invoice {
     // EXTRACCI脫N FINANCIERA SEG脷N FACTURA REAL (Total Bruto, Total a Pagar)
     // Buscamos 'total' o 'total_value'. Siigo a veces cambia el nombre seg煤n el endpoint.
     const total = Number(siigo.total || siigo.total_value || siigo.total_amount || 0);
     const balance = Number(siigo.balance !== undefined ? siigo.balance : (siigo.total_balance !== undefined ? siigo.total_balance : total));
     
-    // Extracci贸n de IVA y Subtotal del objeto 'cost' o el array 'taxes'
-    let iva = 0;
-    let subtotal = 0;
+    // Extracci髇 robusta de IVA y Subtotal.
+    let iva = Number(
+      siigo?.cost?.iva ||
+      siigo?.tax_total ||
+      siigo?.tax_amount ||
+      siigo?.total_taxes ||
+      0
+    );
+    let subtotal = Number(
+      siigo?.cost?.subtotal ||
+      siigo?.subtotal ||
+      siigo?.sub_total ||
+      0
+    );
 
     if (siigo.cost) {
-      iva = Number(siigo.cost.iva || 0);
-      subtotal = Number(siigo.cost.subtotal || (total - iva));
-    } else if (siigo.taxes && Array.isArray(siigo.taxes)) {
-      const ivaTax = siigo.taxes.find((t: any) => (t.name || t.type || '').toLowerCase().includes('iva'));
-      iva = Number(ivaTax?.value || ivaTax?.amount || 0);
-      subtotal = total - iva;
+      iva = Number(siigo.cost.iva || iva || 0);
+      subtotal = Number(siigo.cost.subtotal || subtotal || (total - iva));
+    }
+
+    if (siigo.taxes && Array.isArray(siigo.taxes)) {
+      const ivaFromTaxes = siigo.taxes
+        .filter((t: any) => String(t?.name || t?.type || '').toLowerCase().includes('iva'))
+        .reduce((acc: number, t: any) => acc + Number(t?.value || t?.amount || t?.total || 0), 0);
+      if (ivaFromTaxes > 0) iva = ivaFromTaxes;
+    }
+
+    if (Array.isArray(siigo.items) && siigo.items.length > 0) {
+      const subtotalFromItems = siigo.items.reduce((acc: number, item: any) => {
+        return acc + Number(item?.subtotal || item?.sub_total || item?.price_total || item?.amount || 0);
+      }, 0);
+
+      const ivaFromItems = siigo.items.reduce((acc: number, item: any) => {
+        const directIva = Number(item?.iva || item?.vat || item?.tax_amount || item?.tax_total || 0);
+        if (directIva > 0) return acc + directIva;
+        if (Array.isArray(item?.taxes)) {
+          return acc + item.taxes
+            .filter((t: any) => String(t?.name || t?.type || '').toLowerCase().includes('iva'))
+            .reduce((sum: number, t: any) => sum + Number(t?.value || t?.amount || t?.total || 0), 0);
+        }
+        return acc;
+      }, 0);
+
+      if (subtotalFromItems > 0) subtotal = subtotalFromItems;
+      if (ivaFromItems > 0) iva = ivaFromItems;
+    }
+
+    if (subtotal > 0 && iva <= 0 && total > subtotal) {
+      iva = Math.max(0, total - subtotal);
+    }
+
+    if (total > 0 && subtotal <= 0) {
+      subtotal = Math.max(0, total - iva);
     }
 
     // Retenciones (Regex para buscar Fuente, IVA, ICA en el array de impuestos)
@@ -160,19 +258,24 @@ export class SiigoService {
     const rc = extractTax(['ica']);
 
     // Identificaci贸n Factura (Regex: FV 1234)
-    const rawPrefix = String(siigo.type?.code || siigo.document?.code || 'FV').toUpperCase().replace(/[^A-Z]/g, '');
+    const rawPrefix = String(siigo.type?.code || siigo.document?.code || 'FV')
+      .toUpperCase()
+      .replace(/[^A-Z]/g, '')
+      .replace(/^FV$/, 'FING');
     const rawNumber = String(siigo.number || siigo.consecutive || '0').replace(/[^0-9]/g, '');
-    const invoiceNumber = `${rawPrefix} ${rawNumber}`;
+    const invoiceNumber = `${rawPrefix}${rawNumber}`;
 
     // Descripci贸n: No confundir el ITEM con el CLIENTE
     // Priorizamos la descripci贸n del primer producto/servicio
     const mainItem = siigo.items?.[0]?.description || siigo.items?.[0]?.name || '';
-    const observations = siigo.observations || '';
-    const finalDescription = (mainItem || observations || 'Servicios Profesionales').trim();
+    const finalDescription = (mainItem || 'Servicios Profesionales').trim();
+    const { documentType, documentNumber } = this.resolveDocumentInfo(customer, realClientName);
 
     return {
       id: siigo.id || `${rawPrefix}${rawNumber}`,
-      clientName: this.cleanClientName(realClientName),
+      clientName: this.resolveClientName(realClientName, customer),
+      documentType,
+      documentNumber,
       invoiceNumber: invoiceNumber,
       description: finalDescription,
       date: siigo.date || new Date().toISOString().split('T')[0],
@@ -186,7 +289,7 @@ export class SiigoService {
       reteIca: rc,
       status: balance <= 100 ? 'Pagada' : 'Pendiente por pagar',
       debtValue: balance,
-      observations: observations,
+      observations: '',
       moraDays: 0,
       isSynced: false
     };
@@ -194,3 +297,4 @@ export class SiigoService {
 }
 
 export const siigoService = new SiigoService();
+

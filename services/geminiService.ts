@@ -1,19 +1,13 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { Invoice, AIAuditFinding } from "../types";
 
-/**
- * AUDITORÍA INTERNA CRÍTICA:
- * Detecta si el campo 'clientName' contiene en realidad una descripción técnica.
- * Compara los datos mapeados con el JSON original (RAW) de la API de Siigo.
- */
 export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData: any[]): Promise<Invoice[]> => {
   if (mappedInvoices.length === 0) return [];
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.error("GEMINI_API_KEY no está configurada en el entorno.");
+      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
       return mappedInvoices;
     }
     const ai = new GoogleGenAI({ apiKey });
@@ -40,23 +34,20 @@ export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData:
 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
-      contents: `ACTÚA COMO UN AUDITOR FINANCIERO SENIOR.
-      Tu misión es asegurar que los datos de la API de Siigo se hayan mapeado correctamente.
-      
-      ERRORES CRÍTICOS A CORREGIR:
-      1. CRUCE DE CAMPOS: Si el 'current_mapping.client' es una frase larga, describe un servicio (ej: "SOPORTE Y MANTENIMIENTO...", "CONFERENCIA EN INTELIGENCIA ARTIFICIAL..."), ES UN ERROR. 
-      2. VALORES EN CERO: Si 'current_mapping.total' o 'iva' es 0 pero ves valores numéricos en 'siigo_raw_source.financials', extráelos y corrígelos.
-      3. DESCRIPCIÓN: Asegúrate de que la descripción sea la del servicio prestado, no el nombre del cliente.
+      contents: `ACTUA COMO UN AUDITOR FINANCIERO SENIOR.
+      Tu mision es asegurar que los datos de la API de Siigo se hayan mapeado correctamente.
 
-      REGLA DE ORO: El nombre del cliente NUNCA es una descripción técnica. Si el cliente dice algo de Inteligencia Artificial o Soporte, es que está mal mapeado; búscalo en el objeto customer del RAW.
-      
-      FACTURA DE EJEMPLO REAL (Referencia):
-      FING 1076 -> Cliente: ORGANIZACION SANTA LUCIA S.A | Item: Cloud Computing.
+      ERRORES CRITICOS A CORREGIR:
+      1. CRUCE DE CAMPOS: Si el current_mapping.client es una frase larga y tecnica, es un error.
+      2. VALORES EN CERO: Si current_mapping.total o iva es 0 pero ves valores numericos en siigo_raw_source.financials, extraelos y corrigelos.
+      3. DESCRIPCION: Asegurate de que la descripcion sea la del servicio prestado, no el nombre del cliente.
+
+      REGLA DE ORO: El nombre del cliente nunca es una descripcion tecnica.
 
       PROCESAR ESTOS DATOS:
       ${JSON.stringify(context)}`,
       config: {
-        systemInstruction: "NO INVENTES DATOS. Si no encuentras el cliente real en el RAW, mantén el original pero límpialo de NITs. Responde estrictamente en JSON.",
+        systemInstruction: "NO INVENTES DATOS. Si no encuentras el cliente real en el RAW, manten el original pero limpialo de NITs. Responde estrictamente en JSON.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -77,18 +68,18 @@ export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData:
     });
 
     const corrections: any[] = JSON.parse(response.text || "[]");
-    
+
     return mappedInvoices.map((inv, idx) => {
-      const corr = corrections.find(c => c.index === idx);
+      const corr = corrections.find((c) => c.index === idx);
       if (corr && corr.hasChanges) {
         const total = corr.correctedTotal !== undefined ? corr.correctedTotal : inv.total;
         const iva = corr.correctedIva !== undefined ? corr.correctedIva : inv.iva;
         return {
           ...inv,
-          clientName: (corr.correctedClient || inv.clientName).toUpperCase().trim(),
+          clientName: inv.clientName,
           description: corr.correctedDescription || inv.description,
-          total: total,
-          iva: iva,
+          total,
+          iva,
           subtotal: total - iva,
           debtValue: inv.status === 'Pagada' ? 0 : total
         };
@@ -96,7 +87,7 @@ export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData:
       return inv;
     });
   } catch (error) {
-    console.error("Falla en Auditoría de IA (auditSiigoMapping):", error);
+    console.error("Falla en Auditoria de IA (auditSiigoMapping):", error);
     return mappedInvoices;
   }
 };
@@ -106,7 +97,7 @@ export const parseCSVWithAI = async (rawCsvText: string): Promise<Invoice[]> => 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.error("GEMINI_API_KEY no está configurada en el entorno.");
+      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
       return [];
     }
     const ai = new GoogleGenAI({ apiKey });
@@ -114,7 +105,7 @@ export const parseCSVWithAI = async (rawCsvText: string): Promise<Invoice[]> => 
       model: "gemini-3-flash-preview",
       contents: `Analiza este CSV y extrae datos de cartera: ${rawCsvText.substring(0, 30000)}`,
       config: {
-        systemInstruction: "Extrae clientName (Empresa), invoiceNumber (FV 000), date (YYYY-MM-DD), total (numero).",
+        systemInstruction: "Extrae clientName, invoiceNumber, date y total solo cuando existan. No inventes fechas ni descripciones.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -134,28 +125,30 @@ export const parseCSVWithAI = async (rawCsvText: string): Promise<Invoice[]> => 
     });
 
     const extracted: any[] = JSON.parse(response.text || "[]");
-    return extracted.map((item, idx) => ({
-      id: `csv-${Date.now()}-${idx}`,
-      clientName: item.clientName.toUpperCase().trim(),
-      invoiceNumber: item.invoiceNumber.toUpperCase().trim(),
-      description: item.description || "Importación por CSV",
-      date: item.date || new Date().toISOString().split('T')[0],
-      dueDate: item.date || new Date().toISOString().split('T')[0],
-      subtotal: (item.total || 0) / 1.19,
-      iva: (item.total || 0) - ((item.total || 0) / 1.19),
-      total: item.total || 0,
-      discounts: 0,
-      reteFuente: 0,
-      reteIva: 0,
-      reteIca: 0,
-      status: 'Pendiente por pagar',
-      debtValue: item.total || 0,
-      observations: "Procesado por IA",
-      moraDays: 0,
-      isSynced: false
-    }));
+    return extracted
+      .map((item, idx) => ({
+        id: `csv-${Date.now()}-${idx}`,
+        clientName: String(item.clientName || '').toUpperCase().trim(),
+        invoiceNumber: String(item.invoiceNumber || '').toUpperCase().trim(),
+        description: String(item.description || '').trim(),
+        date: String(item.date || '').trim(),
+        dueDate: String(item.date || '').trim(),
+        subtotal: (item.total || 0) / 1.19,
+        iva: (item.total || 0) - ((item.total || 0) / 1.19),
+        total: item.total || 0,
+        discounts: 0,
+        reteFuente: 0,
+        reteIva: 0,
+        reteIca: 0,
+        status: 'Pendiente por pagar' as const,
+        debtValue: item.total || 0,
+        observations: '',
+        moraDays: 0,
+        isSynced: false
+      }))
+      .filter((item) => item.clientName && item.invoiceNumber);
   } catch (error) {
-    console.error("Falla en Auditoría de IA (parseCSVWithAI):", error);
+    console.error("Falla en Auditoria de IA (parseCSVWithAI):", error);
     return [];
   }
 };
@@ -165,7 +158,7 @@ export const runAIAudit = async (invoices: Invoice[]): Promise<AIAuditFinding[]>
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.error("GEMINI_API_KEY no está configurada en el entorno.");
+      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
       return [];
     }
     const ai = new GoogleGenAI({ apiKey });
@@ -173,7 +166,7 @@ export const runAIAudit = async (invoices: Invoice[]): Promise<AIAuditFinding[]>
       model: "gemini-3-flash-preview",
       contents: `Cartera: ${JSON.stringify(invoices.map(i => ({ id: i.id, cli: i.clientName, debt: i.debtValue, mora: i.moraDays })))}`,
       config: {
-        systemInstruction: "Genera alertas para deudas > 60 días.",
+        systemInstruction: "Genera alertas para deudas mayores a 60 dias.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -192,7 +185,7 @@ export const runAIAudit = async (invoices: Invoice[]): Promise<AIAuditFinding[]>
     });
     return JSON.parse(response.text || "[]");
   } catch (error) {
-    console.error("Falla en Auditoría de IA (runAIAudit):", error);
+    console.error("Falla en Auditoria de IA (runAIAudit):", error);
     return [];
   }
 };
