@@ -66,6 +66,18 @@ const ReportTable: React.FC<Props> = ({
     return 'bg-red-500';
   };
 
+  const isNoteCreditStatus = (status?: string) => {
+    const normalized = String(status || '')
+      .replace(/é/g, 'e')
+      .replace(/Ã©/g, 'e')
+      .replace(/\uFFFD/g, 'e')
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z]/g, '');
+    return normalized === 'notacredito' || (/notacr.*dito/.test(normalized) && normalized.startsWith('nota'));
+  };
+
   return (
     <div className="space-y-5">
       {invoices.length === 0 ? (
@@ -76,6 +88,7 @@ const ReportTable: React.FC<Props> = ({
         invoices.map((inv, index) => {
           const amountPaid = inv.paidAmount || 0;
           const creditAmount = inv.creditAmount || 0;
+          const displayDebt = isNoteCreditStatus(inv.status) ? 0 : Number(inv.debtValue || 0);
           const isSelected = selectedInvoiceId === inv.id;
 
           return (
@@ -196,8 +209,8 @@ const ReportTable: React.FC<Props> = ({
                       </div>
                       <div className="pt-4 mt-1 border-t border-slate-200 flex items-center justify-between gap-3">
                         <span className="text-slate-900 font-black text-[15px] uppercase tracking-widest">Deuda</span>
-                        <span className={`text-[34px] leading-none font-black ${inv.debtValue > 0 ? 'text-[#ef4444]' : 'text-emerald-600'}`}>
-                          {formatCurrency(inv.debtValue)}
+                        <span className={`text-[34px] leading-none font-black ${displayDebt > 0 ? 'text-[#ef4444]' : 'text-emerald-600'}`}>
+                          {formatCurrency(displayDebt)}
                         </span>
                       </div>
                     </div>

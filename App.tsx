@@ -121,6 +121,8 @@ const normalizeStatusKey = (value?: string) => {
   return 'Pendiente por pagar';
 };
 
+const isNoteCreditStatus = (value?: string) => normalizeStatusKey(value) === NOTE_CREDIT_STATUS;
+
 const normalizeDigits = (value?: string) =>
   String(value || '').replace(/[^\d]/g, '').trim();
 
@@ -608,7 +610,11 @@ const App: React.FC = () => {
             currentMora = diffDays > 0 ? diffDays : 0;
           }
         }
-        return { ...inv, moraDays: currentMora };
+        return {
+          ...inv,
+          debtValue: isNoteCreditStatus(inv.status) ? 0 : Number(inv.debtValue || 0),
+          moraDays: currentMora,
+        };
       })
       .filter((inv) => {
         const matchesSearch =
