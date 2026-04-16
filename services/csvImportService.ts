@@ -11,6 +11,9 @@ const normalizeInvoiceNumber = (value?: string) => {
   return clean;
 };
 
+const isNoteCreditStatus = (status: PaymentStatus) =>
+  status === 'Nota crédito' || status === 'Nota crÃ©dito' || status === 'Nota cr?dito';
+
 const parseDelimited = (text: string, delimiter = ';'): string[][] => {
   const rows: string[][] = [];
   let row: string[] = [];
@@ -166,7 +169,11 @@ export const parseCarteraCsv = (text: string): Invoice[] => {
       reteIva,
       reteIca,
       status,
-      debtValue: providedDebt > 0 ? providedDebt : (status === 'Pagada' ? 0 : Math.max(0, total - totalDeductions)),
+      debtValue: status === 'Pagada' || isNoteCreditStatus(status)
+        ? 0
+        : providedDebt > 0
+          ? providedDebt
+          : Math.max(0, total - totalDeductions),
       observations: cleanText(row[observationsIndex] || ''),
       moraDays: parseNumber(row[moraIndex] || ''),
       bankCommission,

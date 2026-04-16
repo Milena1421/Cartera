@@ -642,14 +642,16 @@ const App: React.FC = () => {
       (invoice) => normalizeStatusKey(invoice.status) === 'Pendiente por pagar' && Number(invoice.debtValue || 0) > 0
     );
 
-    const groups = pendingInvoices.reduce<Record<string, {
+    type PortfolioSummaryGroup = {
       clientName: string;
       invoices: Invoice[];
       totalSubtotal: number;
       totalIva: number;
       totalAmount: number;
       totalDebt: number;
-    }>>((acc, invoice) => {
+    };
+
+    const groups = pendingInvoices.reduce<Record<string, PortfolioSummaryGroup>>((acc, invoice) => {
       const clientName = getClientDisplayName(invoice);
       const currentGroup = acc[clientName] || {
         clientName,
@@ -669,7 +671,7 @@ const App: React.FC = () => {
       return acc;
     }, {});
 
-    return Object.values(groups)
+    return (Object.values(groups) as PortfolioSummaryGroup[])
       .map((group) => ({
         ...group,
         invoices: group.invoices.sort(

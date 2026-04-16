@@ -54,6 +54,11 @@ export const supabaseService = {
     if (compact === 'notacredito' || (/notacr.*dito/.test(compact) && compact.startsWith('nota'))) return NOTE_CREDIT_STATUS;
     return 'Pendiente por pagar';
   },
+
+  isNoteCreditStatus(value?: string) {
+    return this.normalizePaymentStatus(value) === NOTE_CREDIT_STATUS;
+  },
+
   getFirstDefined(row: any, keys: string[]) {
     for (const key of keys) {
       if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '') {
@@ -151,6 +156,7 @@ export const supabaseService = {
     const total = Number(invoice.total) || 0;
     const debt = Number(invoice.debtValue) || 0;
     if (total <= 0 || debt < 0) return false;
+    if (this.isNoteCreditStatus(invoice.status)) return debt === 0;
     const deductions =
       (Number(invoice.paidAmount) || 0) +
       (Number(invoice.creditAmount) || 0) +
@@ -241,6 +247,7 @@ export const supabaseService = {
     const preferredDebtMatchesMerged = Math.abs(preferredDebt - mergedExpectedDebt) <= 2;
     const fallbackDebtMatchesMerged = Math.abs(fallbackDebt - mergedExpectedDebt) <= 2;
     const mergedDebtValue = (() => {
+      if (preferredIsNoteCredit || fallbackIsNoteCredit) return 0;
       if (preferredDebtMatchesMerged && !fallbackDebtMatchesMerged) return preferredDebt;
       if (fallbackDebtMatchesMerged && !preferredDebtMatchesMerged) return fallbackDebt;
       if (preferredDebtMatchesMerged && fallbackDebtMatchesMerged) {
@@ -502,7 +509,7 @@ export const supabaseService = {
           reteIva: Number(inv.reteIva) || 0,
           reteIca: Number(inv.reteIca) || 0,
           status: this.normalizePaymentStatus(inv.status),
-          debtValue: Number(inv.debtValue) || 0,
+          debtValue: this.isNoteCreditStatus(inv.status) ? 0 : Number(inv.debtValue) || 0,
           observations: this.sanitizeObservation(inv.observations, inv),
           moraDays: Number(inv.moraDays) || 0,
           documentUrl: inv.documentUrl || null,
@@ -649,7 +656,7 @@ export const supabaseService = {
             (normalizedInvoice.reteIva || 0) +
             (normalizedInvoice.reteIca || 0);
           const expectedDebt =
-            normalizedInvoice.status === 'Pagada'
+            normalizedInvoice.status === 'Pagada' || this.isNoteCreditStatus(normalizedInvoice.status)
               ? 0
               : Math.max(0, normalizedInvoice.total - totalDeductions);
 
