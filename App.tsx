@@ -697,7 +697,7 @@ const App: React.FC = () => {
         <div className="w-full max-w-md overflow-hidden rounded-[2.4rem] bg-white shadow-2xl shadow-slate-300/70 border border-slate-200/70">
           <form onSubmit={handleLogin} className="px-10 py-11 sm:px-12 sm:py-12 flex flex-col justify-center gap-8">
             <div>
-              <h1 className="text-[25px] font-black text-slate-950 tracking-tight uppercase">Cuentas Por Pagar</h1>
+              <h1 className="text-[25px] font-black text-slate-950 tracking-tight uppercase">Cuentas Por Cobrar</h1>
               <p className="mt-3 text-[12px] font-black text-slate-400 uppercase tracking-[0.22em]">Selecciona usuario y contraseña</p>
             </div>
 
@@ -764,7 +764,7 @@ const App: React.FC = () => {
             <span className="font-black text-lg tracking-tight">Ingeniería 365</span>
           </div>
           <nav className="space-y-1">
-            <button onClick={() => setActiveView('cartera')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-black transition-all ${activeView === 'cartera' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800/50 hover:text-slate-200'}`}><LayoutDashboard size={18} /> <span className="text-sm">Cuentas Por Pagar</span></button>
+            <button onClick={() => setActiveView('cartera')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-black transition-all ${activeView === 'cartera' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800/50 hover:text-slate-200'}`}><LayoutDashboard size={18} /> <span className="text-sm">Cuentas Por Cobrar</span></button>
             {canModifyInvoices && <button onClick={() => setActiveView('conciliacion')} className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-black transition-all ${activeView === 'conciliacion' ? 'bg-blue-600 text-white' : 'hover:bg-slate-800/50 hover:text-slate-200'}`}><Landmark size={18} /> <span className="text-sm">Conciliación</span></button>}
           </nav>
           <div className="mt-10 pt-8 border-t border-slate-800/50 space-y-4">
