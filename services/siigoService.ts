@@ -66,30 +66,105 @@ export class SiigoService {
     return String(value || '').replace(/[^\d]/g, '').trim();
   }
 
+  private isUsableCustomerName(value?: string): boolean {
+    const cleaned = this.cleanClientName(String(value || ''));
+    return Boolean(cleaned && cleaned !== 'CLIENTE NO IDENTIFICADO' && !this.isIdentifierOnly(cleaned));
+  }
+
   private extractCustomerName(cust: any): string {
     if (!cust) return '';
-    
-    // Prioridad 1: Nombres comerciales o razones sociales completas
-    let name = cust.full_name || cust.business_name || '';
-    
-    // Prioridad 2: Nombres desglosados (API v1 estandar)
-    if (!name && cust.name) {
+
+    const candidates: string[] = [
+      cust.full_name,
+      cust.business_name,
+      cust.commercial_name,
+      cust.company_name,
+      cust.trade_name,
+      cust.display_name,
+      cust.legal_name,
+      cust.social_reason,
+      cust.razon_social,
+      cust.nombre,
+      cust.customer_name,
+    ].filter(Boolean).map(String);
+
+    if (cust.name) {
       if (typeof cust.name === 'object') {
-        const parts = [cust.name.first_name, cust.name.last_name].filter(Boolean);
-        name = parts.join(' ');
+        candidates.push(
+          [
+            cust.name.first_name,
+            cust.name.middle_name,
+            cust.name.last_name,
+            cust.name.second_last_name,
+          ].filter(Boolean).join(' ')
+        );
       } else if (Array.isArray(cust.name)) {
-        name = cust.name.join(' ');
+        candidates.push(cust.name.join(' '));
       } else {
-        name = String(cust.name);
+        candidates.push(String(cust.name));
       }
     }
 
-    // Prioridad 3: Identificacion (ultimo recurso)
-    if (!name && cust.identification) {
-      name = `ID: ${cust.identification}`;
+    if (Array.isArray(cust.contacts)) {
+      cust.contacts.forEach((contact: any) => {
+        candidates.push(
+          [
+            contact?.first_name,
+            contact?.middle_name,
+            contact?.last_name,
+            contact?.second_last_name,
+          ].filter(Boolean).join(' ')
+        );
+        if (contact?.name) candidates.push(String(contact.name));
+      });
     }
 
-    return name.trim();
+    return candidates.find((name) => this.isUsableCustomerName(name))?.trim() || '';
+  }
+
+  private getCustomerId(customer: any): string {
+    return String(customer?.id || customer?.customer_id || customer?.uuid || '').trim();
+  }
+
+  private hasResolvedCustomer(invoice: any): boolean {
+    return this.isUsableCustomerName(this.extractCustomerName(invoice?.customer));
+  }
+
+  private async hydrateCustomerData(invoice: any): Promise<any> {
+    let hydratedInvoice = invoice;
+
+    try {
+      if (!this.hasResolvedCustomer(hydratedInvoice) && hydratedInvoice?.id) {
+        const detail = await this.requestSiigo<any>(`/invoices/${encodeURIComponent(String(hydratedInvoice.id))}`);
+        hydratedInvoice = {
+          ...hydratedInvoice,
+          ...detail,
+          customer: {
+            ...(hydratedInvoice.customer || {}),
+            ...(detail?.customer || {}),
+          },
+        };
+      }
+
+      const customerId = this.getCustomerId(hydratedInvoice?.customer);
+      if (!this.hasResolvedCustomer(hydratedInvoice) && customerId) {
+        const customerDetail = await this.requestSiigo<any>(`/customers/${encodeURIComponent(customerId)}`);
+        hydratedInvoice = {
+          ...hydratedInvoice,
+          customer: {
+            ...(hydratedInvoice.customer || {}),
+            ...(customerDetail || {}),
+          },
+        };
+      }
+    } catch (error) {
+      console.warn('No se pudo hidratar cliente desde Siigo:', {
+        invoice: hydratedInvoice?.id || hydratedInvoice?.number || hydratedInvoice?.consecutive,
+        error,
+      });
+    }
+
+    return hydratedInvoice;
   }
 
   private resolveClientName(realClientName: string, customer: any): string {
@@ -158,12 +233,17 @@ export class SiigoService {
         page++;
       } while (page <= totalPages && page <= 3);
 
-      const mapped = allResults.map((inv) => {
+      const hydratedResults: any[] = [];
+      for (const inv of allResults) {
+        hydratedResults.push(await this.hydrateCustomerData(inv));
+      }
+
+      const mapped = hydratedResults.map((inv) => {
         const rawName = this.extractCustomerName(inv.customer);
         return this.mapToInternalInvoice(inv, rawName, inv.customer);
       });
 
-      return { invoices: mapped, raw: allResults };
+      return { invoices: mapped, raw: hydratedResults };
     } catch (error) {
       console.error('Siigo getInvoices Error:', error);
       throw error;
