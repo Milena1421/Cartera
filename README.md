@@ -15,7 +15,7 @@ View your app in AI Studio: https://ai.studio/apps/8e447b0e-6fbd-431e-9290-73130
 
 1. Install dependencies:
    `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+2. Set `GEMINI_API_KEY` and the `SIIGO_*` variables in [.env.local](.env.local)
 3. Run the app:
    `npm run dev`
 
@@ -28,9 +28,10 @@ This project is ready to run in Cloud Run with Docker.
 Set these in Cloud Run:
 
 - `GEMINI_API_KEY`
-- `VITE_SIIGO_API_URL`
-- `VITE_SIIGO_USERNAME`
-- `VITE_SIIGO_ACCESS_KEY`
+- `SIIGO_API_URL`
+- `SIIGO_USERNAME`
+- `SIIGO_ACCESS_KEY`
+- `SIIGO_PARTNER_ID`
 
 If your frontend build depends on public Vite variables, also provide them during the Docker build:
 
@@ -43,9 +44,10 @@ If your frontend build depends on public Vite variables, also provide them durin
 docker build -t cartera .
 docker run --rm -p 8080:8080 \
   -e GEMINI_API_KEY=your_gemini_key \
-  -e VITE_SIIGO_API_URL=https://api.siigo.com/v1 \
-  -e VITE_SIIGO_USERNAME=your_siigo_user \
-  -e VITE_SIIGO_ACCESS_KEY=your_siigo_key \
+  -e SIIGO_API_URL=https://api.siigo.com/v1 \
+  -e SIIGO_USERNAME=your_siigo_user \
+  -e SIIGO_ACCESS_KEY=your_siigo_key \
+  -e SIIGO_PARTNER_ID=Ingenieria365 \
   cartera
 ```
 
@@ -60,7 +62,7 @@ gcloud run deploy cartera \
   --region REGION \
   --allow-unauthenticated \
   --port 8080 \
-  --set-env-vars GEMINI_API_KEY=your_gemini_key,VITE_SIIGO_API_URL=https://api.siigo.com/v1,VITE_SIIGO_USERNAME=your_siigo_user,VITE_SIIGO_ACCESS_KEY=your_siigo_key
+  --set-env-vars GEMINI_API_KEY=your_gemini_key,SIIGO_API_URL=https://api.siigo.com/v1,SIIGO_USERNAME=your_siigo_user,SIIGO_ACCESS_KEY=your_siigo_key,SIIGO_PARTNER_ID=Ingenieria365
 ```
 
 ### Health check

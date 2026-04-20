@@ -1,49 +1,41 @@
+import { Invoice } from '../types';
 
-import { Invoice, PaymentStatus } from '../types';
-
-const SIIGO_BASE_URL = String(import.meta.env.VITE_SIIGO_API_URL || 'https://api.siigo.com/v1').trim();
-const AUTH_URL = 'https://api.siigo.com/auth';
-
-const SIIGO_USERNAME = String(import.meta.env.VITE_SIIGO_USERNAME || '').trim();
-const SIIGO_ACCESS_KEY = String(import.meta.env.VITE_SIIGO_ACCESS_KEY || '').trim();
-const PARTNER_ID = 'Ingenieria365'; 
 export class SiigoService {
-  private token: string | null = null;
-
-  private withProxy(url: string, bypassCache: boolean = true): string {
-    const targetUrl = bypassCache ? `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}` : url;
-    return `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
-  }
-
-  private async authenticate(): Promise<string> {
-    if (this.token) return this.token;
+  private async requestSiigo<T>(endpoint: string, method: string = 'GET', data?: unknown): Promise<T> {
     try {
-      if (!SIIGO_USERNAME || !SIIGO_ACCESS_KEY) {
-        throw new Error('Credenciales de Siigo no configuradas.');
-      }
-      const response = await fetch(this.withProxy(AUTH_URL, false), {
+      const response = await fetch('/api/siigo', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
         },
         body: JSON.stringify({
-          username: SIIGO_USERNAME,
-          access_key: SIIGO_ACCESS_KEY,
+          endpoint,
+          method,
+          data,
         }),
       });
-      if (!response.ok) throw new Error(`Error de Autenticación: ${response.status}`);
-      const data = await response.json();
-      this.token = data.access_token;
-      return this.token!;
+
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message =
+          payload?.error?.Errors?.[0]?.Message ||
+          payload?.error?.message ||
+          payload?.error ||
+          `Error HTTP ${response.status}`;
+        throw new Error(String(message));
+      }
+
+      return payload as T;
     } catch (error) {
-      console.error('Siigo Auth Failure:', error);
-      throw new Error('Error de conexión con Siigo.');
+      console.error('Siigo proxy request failure:', error);
+      const detail = error instanceof Error ? error.message : 'sin detalle';
+      throw new Error(`Error de conexion con Siigo: ${detail}`);
     }
   }
 
   /**
-   * Limpia el nombre del cliente usando Regex para asegurar que no sea una descripción técnica.
+   * Limpia el nombre del cliente usando Regex para asegurar que no sea una descripcion tecnica.
    */
   private cleanClientName(name: string): string {
     if (!name) return 'CLIENTE NO IDENTIFICADO';
@@ -51,11 +43,11 @@ export class SiigoService {
     // 1. Eliminar NITs (ej: 900.000.000-0 o 123456789-0)
     let cleaned = name.replace(/\d{3,}(\.\d{3,})?(\.\d{3,})?-\d/g, '');
     
-    // 2. Eliminar prefijos comunes de identificación
+    // 2. Eliminar prefijos comunes de identificacion
     cleaned = cleaned.replace(/^(NIT|CC|ID|CEDULA|IDENTIFICACION|SR|SRA|CLIENTE)[:.\s-]*/i, '');
     
-    // 3. Si el nombre contiene palabras clave de descripción (ej: "CONFERENCIA", "MANTENIMIENTO"), 
-    // es probable que el mapeo haya fallado. El audit de IA corregirá esto después.
+    // 3. Si el nombre contiene palabras clave de descripcion (ej: "CONFERENCIA", "MANTENIMIENTO"),
+    // es probable que el mapeo haya fallado. El audit de IA corregira esto despues.
     
     return cleaned.replace(/\s+/g, ' ').trim().toUpperCase();
   }
@@ -80,7 +72,7 @@ export class SiigoService {
     // Prioridad 1: Nombres comerciales o razones sociales completas
     let name = cust.full_name || cust.business_name || '';
     
-    // Prioridad 2: Nombres desglosados (API v1 estándar)
+    // Prioridad 2: Nombres desglosados (API v1 estandar)
     if (!name && cust.name) {
       if (typeof cust.name === 'object') {
         const parts = [cust.name.first_name, cust.name.last_name].filter(Boolean);
@@ -92,7 +84,7 @@ export class SiigoService {
       }
     }
 
-    // Prioridad 3: Identificación (último recurso)
+    // Prioridad 3: Identificacion (ultimo recurso)
     if (!name && cust.identification) {
       name = `ID: ${cust.identification}`;
     }
@@ -142,32 +134,27 @@ export class SiigoService {
 
   async getInvoices(startDate?: string, endDate?: string): Promise<{invoices: Invoice[], raw: any[]}> {
     try {
-      const token = await this.authenticate();
       let allResults: any[] = [];
       let page = 1;
       let totalPages = 1;
 
-      // Buscamos los últimos 45 días por defecto
+      // Buscamos los ultimos 45 dias por defecto
       const defaultStart = new Date(Date.now() - (45 * 24 * 60 * 60 * 1000)).toISOString().split('T')[0];
       const start = startDate || defaultStart;
 
       do {
-        let url = `${SIIGO_BASE_URL}/invoices?page=${page}&page_size=30&created_start=${start}`;
-        if (endDate) url += `&created_end=${endDate}`;
-
-        const response = await fetch(this.withProxy(url), {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-            'Partner-Id': PARTNER_ID,
-            'Content-Type': 'application/json'
-          },
+        const params = new URLSearchParams({
+          page: String(page),
+          page_size: '30',
+          created_start: start,
+          t: String(Date.now()),
         });
+        if (endDate) params.set('created_end', endDate);
 
-        if (!response.ok) break;
-        const data = await response.json();
-        const results = data.results || [];
+        const data = await this.requestSiigo<any>(`/invoices?${params.toString()}`);
+        const results = data?.results || [];
         allResults = [...allResults, ...results];
-        totalPages = data.pagination?.total_pages || 1;
+        totalPages = data?.pagination?.total_pages || 1;
         page++;
       } while (page <= totalPages && page <= 3);
 
@@ -184,12 +171,12 @@ export class SiigoService {
   }
 
   private mapToInternalInvoice(siigo: any, realClientName: string, customer: any): Invoice {
-    // EXTRACCIÓN FINANCIERA SEGÚN FACTURA REAL (Total Bruto, Total a Pagar)
-    // Buscamos 'total' o 'total_value'. Siigo a veces cambia el nombre según el endpoint.
+    // EXTRACCION FINANCIERA SEGUN FACTURA REAL (Total Bruto, Total a Pagar)
+    // Buscamos 'total' o 'total_value'. Siigo a veces cambia el nombre segun el endpoint.
     const total = Number(siigo.total || siigo.total_value || siigo.total_amount || 0);
     const balance = Number(siigo.balance !== undefined ? siigo.balance : (siigo.total_balance !== undefined ? siigo.total_balance : total));
     
-    // Extracci�n robusta de IVA y Subtotal.
+    // Extraccion robusta de IVA y Subtotal.
     let iva = Number(
       siigo?.cost?.iva ||
       siigo?.tax_total ||
@@ -257,7 +244,7 @@ export class SiigoService {
     const ri = extractTax(['iva']); // ReteIVA
     const rc = extractTax(['ica']);
 
-    // Identificación Factura (Regex: FV 1234)
+    // Identificacion Factura (Regex: FV 1234)
     const rawPrefix = String(siigo.type?.code || siigo.document?.code || 'FV')
       .toUpperCase()
       .replace(/[^A-Z]/g, '')
@@ -265,8 +252,8 @@ export class SiigoService {
     const rawNumber = String(siigo.number || siigo.consecutive || '0').replace(/[^0-9]/g, '');
     const invoiceNumber = `${rawPrefix}${rawNumber}`;
 
-    // Descripción: No confundir el ITEM con el CLIENTE
-    // Priorizamos la descripción del primer producto/servicio
+    // Descripcion: No confundir el ITEM con el CLIENTE
+    // Priorizamos la descripcion del primer producto/servicio
     const mainItem = siigo.items?.[0]?.description || siigo.items?.[0]?.name || '';
     const finalDescription = (mainItem || 'Servicios Profesionales').trim();
     const { documentType, documentNumber } = this.resolveDocumentInfo(customer, realClientName);
@@ -297,4 +284,3 @@ export class SiigoService {
 }
 
 export const siigoService = new SiigoService();
-
