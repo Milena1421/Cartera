@@ -2,6 +2,7 @@
 import React from 'react';
 import { FinancialStats } from '../types';
 import { TrendingUp, TrendingDown, Clock, DollarSign, FileText } from 'lucide-react';
+import { formatCurrency, formatNumber } from '../utils/formatters';
 
 interface Props {
   stats: FinancialStats;
@@ -45,10 +46,6 @@ const DashboardStats: React.FC<Props> = ({ stats }) => {
       format: 'currency'
     }
   ];
-
-  const formatCurrency = (val: number) => 
-    new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 }).format(val);
-  const formatNumber = (val: number) => new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(val);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6 mb-8">

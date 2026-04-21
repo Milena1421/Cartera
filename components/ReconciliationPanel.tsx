@@ -1,6 +1,7 @@
 import React, { useMemo, useRef } from 'react';
 import { Upload, CheckCircle2, AlertCircle, Landmark } from 'lucide-react';
 import { BankTransaction, Invoice } from '../types';
+import { formatCurrency } from '../utils/formatters';
 
 interface ReconciliationMatch {
   transaction: BankTransaction;
@@ -309,9 +310,6 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
       })
     );
   };
-
-  const formatCurrency = (value: number) =>
-    `$ ${new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(value || 0)}`;
 
   return (
     <div className="space-y-8">

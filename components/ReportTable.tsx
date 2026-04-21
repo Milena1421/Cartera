@@ -1,6 +1,7 @@
-import React from 'react';
+﻿import React from 'react';
 import { Invoice, AIAuditFinding } from '../types';
 import { Edit3, Calendar, Landmark, Copy, Check, Trash2 } from 'lucide-react';
+import { formatCurrency } from '../utils/formatters';
 
 interface Props {
   invoices: Invoice[];
@@ -49,11 +50,6 @@ const ReportTable: React.FC<Props> = ({
     return true;
   };
 
-  const formatCurrency = (val?: number) => {
-    const num = val === undefined || val === null ? 0 : val;
-    return `$ ${new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 }).format(num)}`;
-  };
-
   const handleCopy = (text: string, id: string) => {
     navigator.clipboard.writeText(text);
     setCopiedId(id);
@@ -62,14 +58,14 @@ const ReportTable: React.FC<Props> = ({
 
   const getStatusStripeClass = (status: string) => {
     if (status === 'Pagada') return 'bg-emerald-500';
-    if (status === 'Nota cr�dito' || status === 'Nota crédito' || status === 'Nota crÃ©dito') return 'bg-amber-400';
+    if (status === 'Nota crédito' || status === 'Nota crÃ©dito' || status === 'Nota crÃƒÂ©dito') return 'bg-amber-400';
     return 'bg-red-500';
   };
 
   const isNoteCreditStatus = (status?: string) => {
     const normalized = String(status || '')
-      .replace(/é/g, 'e')
       .replace(/Ã©/g, 'e')
+      .replace(/ÃƒÂ©/g, 'e')
       .replace(/\uFFFD/g, 'e')
       .toLowerCase()
       .normalize('NFD')
@@ -82,7 +78,7 @@ const ReportTable: React.FC<Props> = ({
     <div className="space-y-5">
       {invoices.length === 0 ? (
         <div className="bg-white rounded-[1rem] shadow-sm overflow-hidden border border-slate-100 p-20 text-center text-slate-500 italic font-medium">
-          No se encontraron facturas. Inicie sincronización con Siigo.
+          No se encontraron facturas. Inicie sincronizaciÃ³n con Siigo.
         </div>
       ) : (
         invoices.map((inv, index) => {
@@ -238,7 +234,7 @@ const ReportTable: React.FC<Props> = ({
                     <div className="flex items-start justify-between gap-4 mb-4">
                       <div className="flex flex-col gap-1">
                         <span className="text-slate-500 uppercase font-black text-[10px] tracking-widest">Estado</span>
-                        <span className={`font-black text-[10px] px-3 py-1.5 rounded-sm uppercase tracking-widest self-start ${inv.status === 'Pagada' ? 'bg-emerald-50 text-emerald-600' : inv.status === 'Nota cr�dito' || inv.status === 'Nota crédito' || inv.status === 'Nota crÃ©dito' ? 'bg-amber-50 text-amber-600' : 'bg-red-50 text-red-600'}`}>
+                        <span className={`font-black text-[10px] px-3 py-1.5 rounded-sm uppercase tracking-widest self-start ${inv.status === 'Pagada' ? 'bg-emerald-50 text-emerald-600' : inv.status === 'Nota crédito' || inv.status === 'Nota crÃ©dito' || inv.status === 'Nota crÃƒÂ©dito' ? 'bg-amber-50 text-amber-600' : 'bg-red-50 text-red-600'}`}>
                           {inv.status}
                         </span>
                       </div>
@@ -296,4 +292,5 @@ const ReportTable: React.FC<Props> = ({
 };
 
 export default ReportTable;
+
 

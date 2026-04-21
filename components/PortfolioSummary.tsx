@@ -1,6 +1,7 @@
 import React from 'react';
 import { FileText, Receipt, UserRound } from 'lucide-react';
 import { Invoice } from '../types';
+import { formatCurrency } from '../utils/formatters';
 
 type ClientSummary = {
   clientName: string;
@@ -14,15 +15,6 @@ type ClientSummary = {
 interface Props {
   groups: ClientSummary[];
 }
-
-const formatCurrency = (value?: number) => {
-  const amount = Number(value || 0);
-  return new Intl.NumberFormat('es-CO', {
-    style: 'currency',
-    currency: 'COP',
-    maximumFractionDigits: 0,
-  }).format(amount);
-};
 
 const formatDate = (value?: string) => {
   if (!value) return '-';
