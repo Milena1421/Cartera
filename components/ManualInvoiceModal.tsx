@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Save, FileText, User, Calendar, DollarSign, AlignLeft, PieChart, Landmark } from 'lucide-react';
 import { Invoice, PaymentStatus } from '../types';
+import { formatDecimalValue } from '../utils/formatters';
 
 interface Props {
   isOpen: boolean;
@@ -93,17 +94,17 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
         observations: initialData.observations || '',
         date: initialData.date,
         dueDate: initialData.dueDate || initialData.date,
-        subtotal: initialData.subtotal.toString(),
-        iva: initialData.iva.toString(),
-        total: initialData.total.toString(),
+        subtotal: formatDecimalValue(initialData.subtotal),
+        iva: formatDecimalValue(initialData.iva),
+        total: formatDecimalValue(initialData.total),
         status: normalizePaymentStatus(initialData.status),
         paymentDate: initialData.paymentDate || '',
         creditDate: initialData.creditDate || '',
-        creditAmount: initialData.creditAmount?.toString() || '',
-        paidAmount: initialData.paidAmount?.toString() || '',
-        reteFuente: initialData.reteFuente?.toString() || '',
-        reteIva: initialData.reteIva?.toString() || '',
-        reteIca: initialData.reteIca?.toString() || '',
+        creditAmount: initialData.creditAmount !== undefined ? formatDecimalValue(initialData.creditAmount) : '',
+        paidAmount: initialData.paidAmount !== undefined ? formatDecimalValue(initialData.paidAmount) : '',
+        reteFuente: initialData.reteFuente !== undefined ? formatDecimalValue(initialData.reteFuente) : '',
+        reteIva: initialData.reteIva !== undefined ? formatDecimalValue(initialData.reteIva) : '',
+        reteIca: initialData.reteIca !== undefined ? formatDecimalValue(initialData.reteIca) : '',
       });
     } else {
       const today = new Date().toISOString().split('T')[0];

@@ -1,6 +1,47 @@
 import { Invoice } from '../types';
 
 export class SiigoService {
+  private formatSiigoError(payload: any, status?: number): string {
+    const error = payload?.error ?? payload;
+    const candidates = [
+      error?.Errors?.[0]?.Message,
+      error?.errors?.[0]?.message,
+      error?.message,
+      error?.Message,
+      error?.detail,
+      error?.details,
+      error?.title,
+      typeof error === 'string' ? error : '',
+    ].filter(Boolean);
+
+    if (candidates.length > 0) return String(candidates[0]);
+    if (status) return `Error HTTP ${status}`;
+    return 'sin detalle';
+  }
+
+  private toNumber(value: unknown): number {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+
+    const text = String(value ?? '').trim();
+    if (!text) return 0;
+
+    const cleaned = text.replace(/\$/g, '').replace(/\s/g, '');
+    let normalized = cleaned;
+
+    if (cleaned.includes('.') && cleaned.includes(',')) {
+      normalized = cleaned.replace(/\./g, '').replace(',', '.');
+    } else if (cleaned.includes(',')) {
+      const decimalPart = cleaned.split(',').pop() || '';
+      normalized = decimalPart.length <= 2 ? cleaned.replace(/\./g, '').replace(',', '.') : cleaned.replace(/,/g, '');
+    } else if (cleaned.includes('.')) {
+      const decimalPart = cleaned.split('.').pop() || '';
+      normalized = decimalPart.length <= 2 ? cleaned.replace(/,/g, '') : cleaned.replace(/\./g, '');
+    }
+
+    const parsed = Number(normalized);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
   private async requestSiigo<T>(endpoint: string, method: string = 'GET', data?: unknown): Promise<T> {
     try {
       const response = await fetch('/api/siigo', {
@@ -18,12 +59,7 @@ export class SiigoService {
 
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
-        const message =
-          payload?.error?.Errors?.[0]?.Message ||
-          payload?.error?.message ||
-          payload?.error ||
-          `Error HTTP ${response.status}`;
-        throw new Error(String(message));
+        throw new Error(this.formatSiigoError(payload, response.status));
       }
 
       return payload as T;
@@ -253,18 +289,18 @@ export class SiigoService {
   private mapToInternalInvoice(siigo: any, realClientName: string, customer: any): Invoice {
     // EXTRACCION FINANCIERA SEGUN FACTURA REAL (Total Bruto, Total a Pagar)
     // Buscamos 'total' o 'total_value'. Siigo a veces cambia el nombre segun el endpoint.
-    const total = Number(siigo.total || siigo.total_value || siigo.total_amount || 0);
-    const balance = Number(siigo.balance !== undefined ? siigo.balance : (siigo.total_balance !== undefined ? siigo.total_balance : total));
+    const total = this.toNumber(siigo.total || siigo.total_value || siigo.total_amount || 0);
+    const balance = this.toNumber(siigo.balance !== undefined ? siigo.balance : (siigo.total_balance !== undefined ? siigo.total_balance : total));
     
     // Extraccion robusta de IVA y Subtotal.
-    let iva = Number(
+    let iva = this.toNumber(
       siigo?.cost?.iva ||
       siigo?.tax_total ||
       siigo?.tax_amount ||
       siigo?.total_taxes ||
       0
     );
-    let subtotal = Number(
+    let subtotal = this.toNumber(
       siigo?.cost?.subtotal ||
       siigo?.subtotal ||
       siigo?.sub_total ||
@@ -272,29 +308,29 @@ export class SiigoService {
     );
 
     if (siigo.cost) {
-      iva = Number(siigo.cost.iva || iva || 0);
-      subtotal = Number(siigo.cost.subtotal || subtotal || (total - iva));
+      iva = this.toNumber(siigo.cost.iva || iva || 0);
+      subtotal = this.toNumber(siigo.cost.subtotal || subtotal || (total - iva));
     }
 
     if (siigo.taxes && Array.isArray(siigo.taxes)) {
       const ivaFromTaxes = siigo.taxes
         .filter((t: any) => String(t?.name || t?.type || '').toLowerCase().includes('iva'))
-        .reduce((acc: number, t: any) => acc + Number(t?.value || t?.amount || t?.total || 0), 0);
+        .reduce((acc: number, t: any) => acc + this.toNumber(t?.value || t?.amount || t?.total || 0), 0);
       if (ivaFromTaxes > 0) iva = ivaFromTaxes;
     }
 
     if (Array.isArray(siigo.items) && siigo.items.length > 0) {
       const subtotalFromItems = siigo.items.reduce((acc: number, item: any) => {
-        return acc + Number(item?.subtotal || item?.sub_total || item?.price_total || item?.amount || 0);
+        return acc + this.toNumber(item?.subtotal || item?.sub_total || item?.price_total || item?.amount || 0);
       }, 0);
 
       const ivaFromItems = siigo.items.reduce((acc: number, item: any) => {
-        const directIva = Number(item?.iva || item?.vat || item?.tax_amount || item?.tax_total || 0);
+        const directIva = this.toNumber(item?.iva || item?.vat || item?.tax_amount || item?.tax_total || 0);
         if (directIva > 0) return acc + directIva;
         if (Array.isArray(item?.taxes)) {
           return acc + item.taxes
             .filter((t: any) => String(t?.name || t?.type || '').toLowerCase().includes('iva'))
-            .reduce((sum: number, t: any) => sum + Number(t?.value || t?.amount || t?.total || 0), 0);
+            .reduce((sum: number, t: any) => sum + this.toNumber(t?.value || t?.amount || t?.total || 0), 0);
         }
         return acc;
       }, 0);
@@ -318,7 +354,7 @@ export class SiigoService {
         const name = (t.name || t.type || '').toLowerCase();
         return patterns.some(p => name.includes(p));
       })
-      .reduce((acc: number, t: any) => acc + Number(t.value || t.amount || 0), 0);
+      .reduce((acc: number, t: any) => acc + this.toNumber(t.value || t.amount || 0), 0);
 
     const rf = extractTax(['fuente', 'renta']);
     const ri = extractTax(['iva']); // ReteIVA

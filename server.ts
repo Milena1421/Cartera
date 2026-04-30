@@ -19,6 +19,27 @@ async function startServer() {
   let siigoToken: string | null = null;
   let siigoTokenExpiresAt = 0;
 
+  function normalizeSiigoError(error: any) {
+    const payload = error.response?.data;
+    const detail =
+      payload?.Errors?.[0]?.Message ||
+      payload?.errors?.[0]?.message ||
+      payload?.message ||
+      payload?.Message ||
+      payload?.detail ||
+      payload?.details ||
+      payload?.title ||
+      (typeof payload === 'string' ? payload : '') ||
+      error.message ||
+      'Error desconocido con Siigo.';
+
+    return {
+      detail: String(detail),
+      status: error.response?.status || 500,
+      payload,
+    };
+  }
+
   async function getSiigoToken(): Promise<string> {
     if (siigoToken && Date.now() < siigoTokenExpiresAt) return siigoToken;
 
@@ -89,8 +110,12 @@ async function startServer() {
 
       res.json(siigoResponse.data);
     } catch (error: any) {
-      console.error('Siigo proxy error:', error.response?.data || error.message);
-      res.status(error.response?.status || 500).json({ error: error.response?.data || error.message });
+      const normalized = normalizeSiigoError(error);
+      console.error('Siigo proxy error:', normalized.payload || normalized.detail);
+      res.status(normalized.status).json({
+        error: normalized.detail,
+        status: normalized.status,
+      });
     }
   });
 

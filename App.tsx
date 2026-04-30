@@ -26,6 +26,7 @@ import { siigoService } from './services/siigoService';
 import { runAIAudit, parseCSVWithAI, auditSiigoMapping } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
 import { parseCarteraCsv } from './services/csvImportService';
+import { formatDecimalValue } from './utils/formatters';
 
 const CURRENT_USER_STORAGE_KEY = 'cartera_current_user';
 const DELETED_INVOICES_STORAGE_KEY = 'cartera_deleted_invoice_numbers';
@@ -169,6 +170,8 @@ const escapeCsvValue = (value: unknown) => {
   }
   return text;
 };
+
+const formatCsvAmount = (value: unknown) => formatDecimalValue(Number(value || 0));
 
 const App: React.FC = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -537,18 +540,18 @@ const App: React.FC = () => {
       fecha_emision: invoice.date || '',
       fecha_vencimiento: invoice.dueDate || '',
       descripcion: invoice.description || '',
-      subtotal: Number(invoice.subtotal || 0),
-      iva: Number(invoice.iva || 0),
-      total: Number(invoice.total || 0),
-      rete_fuente: Number(invoice.reteFuente || 0),
-      rete_iva: Number(invoice.reteIva || 0),
-      rete_ica: Number(invoice.reteIca || 0),
+      subtotal: formatCsvAmount(invoice.subtotal),
+      iva: formatCsvAmount(invoice.iva),
+      total: formatCsvAmount(invoice.total),
+      rete_fuente: formatCsvAmount(invoice.reteFuente),
+      rete_iva: formatCsvAmount(invoice.reteIva),
+      rete_ica: formatCsvAmount(invoice.reteIca),
       estado: invoice.status || '',
-      deuda: Number(invoice.debtValue || 0),
+      deuda: formatCsvAmount(invoice.debtValue),
       fecha_pago: invoice.paymentDate || '',
-      valor_recaudado: Number(invoice.paidAmount || 0),
+      valor_recaudado: formatCsvAmount(invoice.paidAmount),
       fecha_abono: invoice.creditDate || '',
-      valor_abono: Number(invoice.creditAmount || 0),
+      valor_abono: formatCsvAmount(invoice.creditAmount),
       observaciones: invoice.observations || '',
       mora_dias: Number(invoice.moraDays || 0),
     }));
