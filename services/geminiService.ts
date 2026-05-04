@@ -189,18 +189,32 @@ const isLikelyClientPayment = (transaction: BankTransaction) => {
   return !excludedConcepts.some((concept) => text.includes(concept));
 };
 
-export const parseBankStatementPdfWithAI = async (file: File): Promise<BankTransaction[]> => {
+const buildPendingInvoiceContext = (invoices: Invoice[]) =>
+  invoices
+    .filter((invoice) => invoice.status !== 'Pagada' && (Number(invoice.debtValue) || 0) > 0)
+    .sort((a, b) => new Date(a.date || '1900-01-01').getTime() - new Date(b.date || '1900-01-01').getTime())
+    .slice(0, 250)
+    .map((invoice) => ({
+      invoiceNumber: invoice.invoiceNumber,
+      clientName: invoice.clientName,
+      documentNumber: invoice.documentNumber || '',
+      issueDate: invoice.date || '',
+      pendingAmount: Number(invoice.debtValue) || 0,
+      total: Number(invoice.total) || 0,
+    }));
+
+export const parseBankStatementPdfWithAI = async (file: File, invoices: Invoice[] = []): Promise<BankTransaction[]> => {
   if (!file || file.size === 0) return [];
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
-      return [];
+      throw new Error("GEMINI_API_KEY no esta configurada en el entorno.");
     }
 
     const ai = new GoogleGenAI({ apiKey });
     const base64Pdf = await fileToBase64(file);
+    const pendingInvoiceContext = buildPendingInvoiceContext(invoices);
 
     const response = await ai.models.generateContent({
       model: "gemini-3-flash-preview",
@@ -210,13 +224,18 @@ export const parseBankStatementPdfWithAI = async (file: File): Promise<BankTrans
 
 Reglas:
 - Incluir solo pagos de clientes: consignaciones, transferencias recibidas, recaudos, pagos de proveedores/clientes o abonos que puedan pagar facturas de cartera.
+- Usa la lista de facturas pendientes como contexto principal. Extrae movimientos cuyo tercero, NIT/documento o valor coincida razonablemente con esas facturas.
+- Si el banco muestra conceptos como PAGO DE PROV, PAGO PROVEEDORES, ABONO PROV o texto similar, tratalo como posible pago de cliente si coincide con un tercero, NIT o valor de la cartera pendiente.
 - Excluir ingresos que NO sean pagos de clientes: intereses de ahorro, intereses, rendimientos, capitalizaciones, saldos, ajustes, reversos, debitos, retiros, comisiones, impuestos, IVA, GMF, encabezados, totales, subtotales y lineas sin valor real.
 - Si el concepto dice INTERESES AHORRO, INTERES AHORRO, RENDIMIENTO o algo similar, NO lo incluyas.
 - No inventes datos. Si no hay NIT, referencia o factura, deja el campo vacio.
 - El valor debe ser positivo, en pesos colombianos, sin separadores.
 - La fecha debe salir en formato YYYY-MM-DD cuando sea posible.
 - La descripcion debe contener tercero/pagador y concepto visible.
-- En reference coloca NIT, documento, comprobante o numero de factura visible que ayude al cruce.`)
+- En reference coloca NIT, documento, comprobante o numero de factura visible que ayude al cruce.
+
+Facturas pendientes de cartera:
+${JSON.stringify(pendingInvoiceContext)}`)
       ],
       config: {
         systemInstruction: "Eres un extractor contable. Devuelve JSON estricto. Si el PDF es escaneado, lee visualmente la tabla. Omite cualquier fila dudosa, ingresos financieros o movimientos que no sean pagos de clientes.",
@@ -254,7 +273,7 @@ Reglas:
       );
   } catch (error) {
     console.error("Falla extrayendo extracto bancario PDF:", error);
-    return [];
+    throw error;
   }
 };
 

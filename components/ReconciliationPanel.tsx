@@ -349,9 +349,16 @@ const ReconciliationPanel: React.FC<Props> = ({
     try {
       const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
       if (isPdf) {
-        const parsedPdfTransactions = await parseBankStatementPdfWithAI(file);
+        let parsedPdfTransactions: BankTransaction[] = [];
+        try {
+          parsedPdfTransactions = await parseBankStatementPdfWithAI(file, invoices);
+        } catch (error: any) {
+          setImportError(error?.message || 'No se pudo leer el PDF con IA. Revisa la configuracion de Gemini e intenta de nuevo.');
+          return;
+        }
+
         if (parsedPdfTransactions.length === 0) {
-          setImportError('No pude extraer ingresos bancarios claros del PDF. Revisa que el extracto sea legible o carga un CSV del banco.');
+          setImportError('No encontre pagos de clientes que coincidan con la cartera pendiente. Exclui intereses, rendimientos, saldos y otros ingresos no asociados a facturas.');
           return;
         }
         onTransactionsChange(parsedPdfTransactions);
