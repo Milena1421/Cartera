@@ -164,6 +164,31 @@ const fileToBase64 = (file: File): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
+const isLikelyClientPayment = (transaction: BankTransaction) => {
+  const text = `${transaction.description || ''} ${transaction.reference || ''}`
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, ' ');
+
+  const excludedConcepts = [
+    'INTERES',
+    'INTERESES',
+    'AHORRO',
+    'RENDIMIENTO',
+    'RENDIMIENTOS',
+    'CAPITALIZACION',
+    'SALDO',
+    'AJUSTE',
+    'REVERSO',
+    'COMISION',
+    'IMPUESTO',
+    'GMF',
+    'IVA',
+  ];
+
+  return !excludedConcepts.some((concept) => text.includes(concept));
+};
+
 export const parseBankStatementPdfWithAI = async (file: File): Promise<BankTransaction[]> => {
   if (!file || file.size === 0) return [];
 
@@ -181,11 +206,12 @@ export const parseBankStatementPdfWithAI = async (file: File): Promise<BankTrans
       model: "gemini-3-flash-preview",
       contents: [
         createPartFromBase64(base64Pdf, file.type || 'application/pdf'),
-        createPartFromText(`Extrae del extracto bancario UNICAMENTE movimientos donde ingreso dinero al banco.
+        createPartFromText(`Extrae del extracto bancario UNICAMENTE pagos de clientes recibidos en el banco.
 
 Reglas:
-- Incluir solo creditos, consignaciones, transferencias recibidas, pagos recibidos, recaudos o abonos a favor.
-- Excluir debitos, retiros, comisiones, impuestos, IVA, GMF, saldos, encabezados, totales, subtotales y lineas sin valor real.
+- Incluir solo pagos de clientes: consignaciones, transferencias recibidas, recaudos, pagos de proveedores/clientes o abonos que puedan pagar facturas de cartera.
+- Excluir ingresos que NO sean pagos de clientes: intereses de ahorro, intereses, rendimientos, capitalizaciones, saldos, ajustes, reversos, debitos, retiros, comisiones, impuestos, IVA, GMF, encabezados, totales, subtotales y lineas sin valor real.
+- Si el concepto dice INTERESES AHORRO, INTERES AHORRO, RENDIMIENTO o algo similar, NO lo incluyas.
 - No inventes datos. Si no hay NIT, referencia o factura, deja el campo vacio.
 - El valor debe ser positivo, en pesos colombianos, sin separadores.
 - La fecha debe salir en formato YYYY-MM-DD cuando sea posible.
@@ -193,7 +219,7 @@ Reglas:
 - En reference coloca NIT, documento, comprobante o numero de factura visible que ayude al cruce.`)
       ],
       config: {
-        systemInstruction: "Eres un extractor contable. Devuelve JSON estricto. Si el PDF es escaneado, lee visualmente la tabla. Omite cualquier fila dudosa o sin ingreso bancario claro.",
+        systemInstruction: "Eres un extractor contable. Devuelve JSON estricto. Si el PDF es escaneado, lee visualmente la tabla. Omite cualquier fila dudosa, ingresos financieros o movimientos que no sean pagos de clientes.",
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.ARRAY,
@@ -221,7 +247,11 @@ Reglas:
         reference: String(item.reference || '').trim(),
         isMatched: false,
       }))
-      .filter((transaction) => transaction.amount > 0 && transaction.description !== 'Movimiento bancario');
+      .filter((transaction) =>
+        transaction.amount > 0 &&
+        transaction.description !== 'Movimiento bancario' &&
+        isLikelyClientPayment(transaction)
+      );
   } catch (error) {
     console.error("Falla extrayendo extracto bancario PDF:", error);
     return [];

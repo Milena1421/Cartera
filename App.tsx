@@ -484,6 +484,30 @@ const App: React.FC = () => {
     }
   };
 
+  const handleReconciliationPayments = async (paidInvoices: Invoice[]) => {
+    if (!requireAdminAccess() || paidInvoices.length === 0) return;
+
+    setCloudStatus('syncing');
+    setErrorMessage(null);
+
+    try {
+      const result = await supabaseService.syncInvoices(paidInvoices);
+      if (!result) {
+        throw new Error('No se pudieron guardar los pagos conciliados en Supabase.');
+      }
+
+      const updatedMaster = (await supabaseService.fetchInvoices()).filter(
+        (invoice) => !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber))
+      );
+      setInvoices(updatedMaster);
+      setCloudStatus('connected');
+    } catch (err: any) {
+      setCloudStatus('error');
+      setErrorMessage(err.message || 'No se pudieron actualizar las facturas conciliadas.');
+      throw err;
+    }
+  };
+
   const handleDeleteInvoice = async (invoice: Invoice) => {
     if (!requireAdminAccess()) return;
 
@@ -878,6 +902,7 @@ const App: React.FC = () => {
                 transactions={bankTransactions}
                 onTransactionsChange={setBankTransactions}
                 selectedMonth={selectedMonth}
+                onApplyInvoicePayments={handleReconciliationPayments}
               />
             )}
           </div>

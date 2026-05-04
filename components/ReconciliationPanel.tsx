@@ -14,6 +14,7 @@ interface Props {
   transactions: BankTransaction[];
   onTransactionsChange: (transactions: BankTransaction[]) => void;
   selectedMonth?: string;
+  onApplyInvoicePayments?: (invoices: Invoice[]) => Promise<void> | void;
 }
 
 type TransactionEditForm = {
@@ -60,6 +61,27 @@ const extractDocumentCandidates = (value?: string) => {
         .filter((candidate) => candidate.length >= 7)
     )
   );
+};
+
+const isLikelyClientPayment = (transaction: BankTransaction) => {
+  const text = normalizeText(`${transaction.description || ''} ${transaction.reference || ''}`);
+  const excludedConcepts = [
+    'INTERES',
+    'INTERESES',
+    'AHORRO',
+    'RENDIMIENTO',
+    'RENDIMIENTOS',
+    'CAPITALIZACION',
+    'SALDO',
+    'AJUSTE',
+    'REVERSO',
+    'COMISION',
+    'IMPUESTO',
+    'GMF',
+    'IVA',
+  ];
+
+  return !excludedConcepts.some((concept) => text.includes(concept));
 };
 
 const sortInvoicesOldestFirst = (invoices: Invoice[]) =>
@@ -277,7 +299,13 @@ const getMonthFromDate = (value?: string) => {
   return String(parsedDate.getMonth() + 1).padStart(2, '0');
 };
 
-const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransactionsChange, selectedMonth = 'all' }) => {
+const ReconciliationPanel: React.FC<Props> = ({
+  invoices,
+  transactions,
+  onTransactionsChange,
+  selectedMonth = 'all',
+  onApplyInvoicePayments,
+}) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isImportingStatement, setIsImportingStatement] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
@@ -368,10 +396,14 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
         reference: referenceIndex >= 0 ? (cells[referenceIndex] || '') : '',
         isMatched: false,
       };
-    }).filter((transaction) => transaction.amount > 0 && (transaction.description || transaction.reference));
+    }).filter((transaction) =>
+      transaction.amount > 0 &&
+      (transaction.description || transaction.reference) &&
+      isLikelyClientPayment(transaction)
+    );
 
     if (parsedTransactions.length === 0) {
-      setImportError('No encontré ingresos bancarios con valor mayor a cero en el archivo.');
+      setImportError('No encontre pagos de clientes con valor mayor a cero en el archivo.');
       return;
     }
 
@@ -382,7 +414,7 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
     }
   };
 
-  const applyMatches = () => {
+  const applyMatches = async () => {
     const resolvedMatches = resolveTransactionMatches(filteredTransactions, invoices);
     const matchedTransactionIds = new Set(
       resolvedMatches
@@ -401,6 +433,38 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
         };
       })
     );
+
+    if (onApplyInvoicePayments) {
+      const paidInvoicesById = new Map<string, Invoice>();
+
+      resolvedMatches.forEach(({ transaction, matchedInvoice }) => {
+        if (!matchedInvoice) return;
+
+        const paymentAmount = Math.abs(Number(transaction.amount) || 0);
+        if (paymentAmount <= 0) return;
+
+        const currentPaidAmount = Number(matchedInvoice.paidAmount) || 0;
+        const paidAmount = Math.max(currentPaidAmount, paymentAmount);
+        const creditAmount = Number(matchedInvoice.creditAmount) || 0;
+        const totalWithholdings =
+          (Number(matchedInvoice.reteFuente) || 0) +
+          (Number(matchedInvoice.reteIva) || 0) +
+          (Number(matchedInvoice.reteIca) || 0);
+        const nextDebt = Math.max(0, (Number(matchedInvoice.total) || 0) - paidAmount - creditAmount - totalWithholdings);
+
+        paidInvoicesById.set(matchedInvoice.id, {
+          ...matchedInvoice,
+          paymentDate: transaction.date || matchedInvoice.paymentDate,
+          paidAmount,
+          debtValue: nextDebt,
+          status: nextDebt <= 2 ? 'Pagada' : matchedInvoice.status,
+        });
+      });
+
+      if (paidInvoicesById.size > 0) {
+        await onApplyInvoicePayments(Array.from(paidInvoicesById.values()));
+      }
+    }
   };
 
   const openEditModal = (transaction: BankTransaction) => {
@@ -652,3 +716,4 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
 };
 
 export default ReconciliationPanel;
+
