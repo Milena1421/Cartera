@@ -11,13 +11,51 @@ async function startServer() {
   const rootDir = path.dirname(fileURLToPath(import.meta.url));
   const distDir = path.join(rootDir, 'dist');
   const env = { ...loadEnv(process.env.NODE_ENV || 'development', process.cwd(), ''), ...process.env };
-  const siigoApiUrl = String(env.SIIGO_API_URL || env.VITE_SIIGO_API_URL || 'https://api.siigo.com/v1').replace(/\/+$/, '');
-  const siigoAuthUrl = String(env.SIIGO_AUTH_URL || 'https://api.siigo.com/auth').trim();
-  const siigoUsername = String(env.SIIGO_USERNAME || env.VITE_SIIGO_USERNAME || '').trim();
-  const siigoAccessKey = String(env.SIIGO_ACCESS_KEY || env.VITE_SIIGO_ACCESS_KEY || '').trim();
-  const siigoPartnerId = String(env.SIIGO_PARTNER_ID || env.VITE_SIIGO_PARTNER_ID || 'Ingenieria365').trim();
   let siigoToken: string | null = null;
   let siigoTokenExpiresAt = 0;
+
+  function firstEnvValue(keys: string[], fallback = '') {
+    for (const key of keys) {
+      const value = String(env[key] || '').trim();
+      if (value) return { key, value };
+    }
+    return { key: '', value: fallback };
+  }
+
+  function getSiigoConfig() {
+    const apiUrl = firstEnvValue(['SIIGO_API_URL', 'VITE_SIIGO_API_URL'], 'https://api.siigo.com/v1');
+    const authUrl = firstEnvValue(['SIIGO_AUTH_URL', 'VITE_SIIGO_AUTH_URL'], 'https://api.siigo.com/auth');
+    const username = firstEnvValue([
+      'SIIGO_USERNAME',
+      'SIIGO_USER',
+      'SIIGO_EMAIL',
+      'VITE_SIIGO_USERNAME',
+      'VITE_SIIGO_USER',
+      'VITE_SIIGO_EMAIL',
+    ]);
+    const accessKey = firstEnvValue([
+      'SIIGO_ACCESS_KEY',
+      'SIIGO_KEY',
+      'VITE_SIIGO_ACCESS_KEY',
+      'VITE_SIIGO_KEY',
+    ]);
+    const partnerId = firstEnvValue(['SIIGO_PARTNER_ID', 'VITE_SIIGO_PARTNER_ID'], 'Ingenieria365');
+
+    return {
+      apiUrl: apiUrl.value.replace(/\/+$/, ''),
+      authUrl: authUrl.value,
+      username: username.value,
+      accessKey: accessKey.value,
+      partnerId: partnerId.value,
+      sources: {
+        apiUrl: apiUrl.key || 'default',
+        authUrl: authUrl.key || 'default',
+        username: username.key || null,
+        accessKey: accessKey.key || null,
+        partnerId: partnerId.key || 'default',
+      },
+    };
+  }
 
   function normalizeSiigoError(error: any) {
     const payload = error.response?.data;
@@ -42,22 +80,26 @@ async function startServer() {
 
   async function getSiigoToken(): Promise<string> {
     if (siigoToken && Date.now() < siigoTokenExpiresAt) return siigoToken;
+    const siigoConfig = getSiigoConfig();
 
-    if (!siigoUsername || !siigoAccessKey) {
-      throw new Error('Credenciales de Siigo no configuradas.');
+    const missing = [];
+    if (!siigoConfig.username) missing.push('SIIGO_USERNAME');
+    if (!siigoConfig.accessKey) missing.push('SIIGO_ACCESS_KEY');
+    if (missing.length > 0) {
+      throw new Error(`Credenciales de Siigo no configuradas. Faltan: ${missing.join(', ')}.`);
     }
 
     const response = await axios.post(
-      siigoAuthUrl,
+      siigoConfig.authUrl,
       {
-        username: siigoUsername,
-        access_key: siigoAccessKey,
+        username: siigoConfig.username,
+        access_key: siigoConfig.accessKey,
       },
       {
         headers: {
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          'Partner-Id': siigoPartnerId,
+          'Partner-Id': siigoConfig.partnerId,
         },
       },
     );
@@ -79,6 +121,19 @@ async function startServer() {
     res.status(200).json({ ok: true });
   });
 
+  app.get('/api/siigo/config', (_req, res) => {
+    const siigoConfig = getSiigoConfig();
+    res.status(200).json({
+      ok: Boolean(siigoConfig.username && siigoConfig.accessKey),
+      hasUsername: Boolean(siigoConfig.username),
+      hasAccessKey: Boolean(siigoConfig.accessKey),
+      hasPartnerId: Boolean(siigoConfig.partnerId),
+      apiUrl: siigoConfig.apiUrl,
+      authUrl: siigoConfig.authUrl,
+      sources: siigoConfig.sources,
+    });
+  });
+
   // Siigo API Proxy
   app.post('/api/siigo', async (req, res) => {
     try {
@@ -93,17 +148,18 @@ async function startServer() {
         return res.status(400).json({ error: 'Metodo de Siigo invalido.' });
       }
 
+      const siigoConfig = getSiigoConfig();
       const accessToken = await getSiigoToken();
 
       // Then, make the actual API call to Siigo
       const siigoResponse = await axios({
         method: requestMethod,
-        url: `${siigoApiUrl}${endpoint}`,
+        url: `${siigoConfig.apiUrl}${endpoint}`,
         headers: {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
           Accept: 'application/json',
-          'Partner-Id': siigoPartnerId,
+          'Partner-Id': siigoConfig.partnerId,
         },
         data: data
       });
