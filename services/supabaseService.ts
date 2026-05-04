@@ -225,6 +225,16 @@ export const supabaseService = {
 
     const preferredIsNoteCredit = this.normalizeKey(preferred.status || '') === 'notacredito';
     const fallbackIsNoteCredit = this.normalizeKey(fallback.status || '') === 'notacredito';
+    const preferredStatus = this.normalizePaymentStatus(preferred.status);
+    const fallbackStatus = this.normalizePaymentStatus(fallback.status);
+    const preferredClearsPayment =
+      preferredStatus === 'Pendiente por pagar' &&
+      !this.hasMeaningfulDate(preferred.paymentDate) &&
+      (Number(preferred.paidAmount) || 0) <= 0;
+    const preferredClearsCredit =
+      preferredStatus === 'Pendiente por pagar' &&
+      !this.hasMeaningfulDate(preferred.creditDate) &&
+      (Number(preferred.creditAmount) || 0) <= 0;
     const mergedSubtotal = pickPreferredNumber(preferred.subtotal, fallback.subtotal);
     const mergedIva = pickPreferredNumber(preferred.iva, fallback.iva);
     const mergedTotal = pickPreferredNumber(preferred.total, fallback.total);
@@ -232,8 +242,12 @@ export const supabaseService = {
     const mergedReteFuente = pickPreferredNumber(preferred.reteFuente, fallback.reteFuente);
     const mergedReteIva = pickPreferredNumber(preferred.reteIva, fallback.reteIva);
     const mergedReteIca = pickPreferredNumber(preferred.reteIca, fallback.reteIca);
-    const mergedCreditAmount = Math.max(Number(preferred.creditAmount) || 0, Number(fallback.creditAmount) || 0);
-    const mergedPaidAmount = Math.max(Number(preferred.paidAmount) || 0, Number(fallback.paidAmount) || 0);
+    const mergedCreditAmount = preferredClearsCredit
+      ? 0
+      : Math.max(Number(preferred.creditAmount) || 0, Number(fallback.creditAmount) || 0);
+    const mergedPaidAmount = preferredClearsPayment
+      ? 0
+      : Math.max(Number(preferred.paidAmount) || 0, Number(fallback.paidAmount) || 0);
     const mergedPaidWithWithholdings = Math.max(
       Number(preferred.paidWithWithholdings) || 0,
       Number(fallback.paidWithWithholdings) || 0
@@ -282,12 +296,18 @@ export const supabaseService = {
       isSynced: Boolean(preferred.isSynced || fallback.isSynced),
       bankCommission: pickPositive(preferred.bankCommission, fallback.bankCommission),
       creditAmount: mergedCreditAmount,
-      creditDate: pickText(preferred.creditDate, fallback.creditDate, this.hasMeaningfulDate.bind(this)),
-      paymentDate: pickText(preferred.paymentDate, fallback.paymentDate, this.hasMeaningfulDate.bind(this)),
+      creditDate: preferredClearsCredit
+        ? ''
+        : pickText(preferred.creditDate, fallback.creditDate, this.hasMeaningfulDate.bind(this)),
+      paymentDate: preferredClearsPayment
+        ? ''
+        : pickText(preferred.paymentDate, fallback.paymentDate, this.hasMeaningfulDate.bind(this)),
       paidAmount: mergedPaidAmount,
       paidWithWithholdings: mergedPaidWithWithholdings,
       status:
-        this.normalizePaymentStatus(preferred.status) === 'Pagada' || this.normalizePaymentStatus(fallback.status) === 'Pagada'
+        preferredClearsPayment && preferredClearsCredit
+          ? 'Pendiente por pagar'
+          : preferredStatus === 'Pagada' || fallbackStatus === 'Pagada'
           ? 'Pagada'
           : preferredIsNoteCredit || fallbackIsNoteCredit
             ? NOTE_CREDIT_STATUS
@@ -559,6 +579,36 @@ export const supabaseService = {
             supabase
               .from(TABLE_NAME)
               .update({ observations: invoice.observations })
+              .eq('invoiceNumber', invoice.invoiceNumber)
+          )
+        );
+      }
+
+      const paymentSyncPayload = dataToSync
+        .map((invoice) => ({
+          invoiceNumber: this.normalizeInvoiceNumber(invoice.invoiceNumber),
+          status: invoice.status,
+          debtValue: Number(invoice.debtValue) || 0,
+          paymentDate: invoice.paymentDate || null,
+          paidAmount: Number(invoice.paidAmount) || 0,
+          creditDate: invoice.creditDate || null,
+          creditAmount: Number(invoice.creditAmount) || 0,
+        }))
+        .filter((invoice) => invoice.invoiceNumber);
+
+      if (paymentSyncPayload.length > 0) {
+        await Promise.all(
+          paymentSyncPayload.map((invoice) =>
+            supabase
+              .from(TABLE_NAME)
+              .update({
+                status: invoice.status,
+                debtValue: invoice.debtValue,
+                paymentDate: invoice.paymentDate,
+                paidAmount: invoice.paidAmount,
+                creditDate: invoice.creditDate,
+                creditAmount: invoice.creditAmount,
+              })
               .eq('invoiceNumber', invoice.invoiceNumber)
           )
         );

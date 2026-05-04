@@ -197,6 +197,17 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     }
   };
 
+  const clearReconciliationPayment = () => {
+    setFormData({
+      ...formData,
+      status: 'Pendiente por pagar',
+      paymentDate: '',
+      paidAmount: '',
+      creditDate: '',
+      creditAmount: '',
+    });
+  };
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200 overflow-y-auto">
       <div className="bg-white rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden border border-slate-100 scale-in-center my-8">
@@ -290,7 +301,16 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
           </div>
 
           <div className="space-y-5">
-            <h3 className="text-[11px] font-black text-emerald-600 uppercase tracking-[0.2em] border-b border-slate-100 pb-2">Control de recaudo</h3>
+            <div className="flex flex-col gap-3 border-b border-slate-100 pb-2 sm:flex-row sm:items-center sm:justify-between">
+              <h3 className="text-[11px] font-black text-emerald-600 uppercase tracking-[0.2em]">Control de recaudo</h3>
+              <button
+                type="button"
+                onClick={clearReconciliationPayment}
+                className="self-start rounded-xl border border-red-100 bg-red-50 px-4 py-2 text-[10px] font-black uppercase tracking-[0.18em] text-red-600 transition-colors hover:border-red-200 hover:bg-red-100"
+              >
+                Quitar pago conciliado
+              </button>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
