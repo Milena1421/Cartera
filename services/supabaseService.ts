@@ -225,6 +225,7 @@ export const supabaseService = {
 
     const preferredIsNoteCredit = this.normalizeKey(preferred.status || '') === 'notacredito';
     const fallbackIsNoteCredit = this.normalizeKey(fallback.status || '') === 'notacredito';
+    const noteCreditInvoice = preferredIsNoteCredit ? preferred : fallbackIsNoteCredit ? fallback : null;
     const preferredStatus = this.normalizePaymentStatus(preferred.status);
     const fallbackStatus = this.normalizePaymentStatus(fallback.status);
     const preferredClearsPayment =
@@ -235,23 +236,29 @@ export const supabaseService = {
       preferredStatus === 'Pendiente por pagar' &&
       !this.hasMeaningfulDate(preferred.creditDate) &&
       (Number(preferred.creditAmount) || 0) <= 0;
-    const mergedSubtotal = pickPreferredNumber(preferred.subtotal, fallback.subtotal);
-    const mergedIva = pickPreferredNumber(preferred.iva, fallback.iva);
-    const mergedTotal = pickPreferredNumber(preferred.total, fallback.total);
-    const mergedDiscounts = pickPreferredNumber(preferred.discounts, fallback.discounts);
-    const mergedReteFuente = pickPreferredNumber(preferred.reteFuente, fallback.reteFuente);
-    const mergedReteIva = pickPreferredNumber(preferred.reteIva, fallback.reteIva);
-    const mergedReteIca = pickPreferredNumber(preferred.reteIca, fallback.reteIca);
-    const mergedCreditAmount = preferredClearsCredit
+    const mergedSubtotal = noteCreditInvoice ? Number(noteCreditInvoice.subtotal) || 0 : pickPreferredNumber(preferred.subtotal, fallback.subtotal);
+    const mergedIva = noteCreditInvoice ? Number(noteCreditInvoice.iva) || 0 : pickPreferredNumber(preferred.iva, fallback.iva);
+    const mergedTotal = noteCreditInvoice ? Number(noteCreditInvoice.total) || 0 : pickPreferredNumber(preferred.total, fallback.total);
+    const mergedDiscounts = noteCreditInvoice ? Number(noteCreditInvoice.discounts) || 0 : pickPreferredNumber(preferred.discounts, fallback.discounts);
+    const mergedReteFuente = noteCreditInvoice ? Number(noteCreditInvoice.reteFuente) || 0 : pickPreferredNumber(preferred.reteFuente, fallback.reteFuente);
+    const mergedReteIva = noteCreditInvoice ? Number(noteCreditInvoice.reteIva) || 0 : pickPreferredNumber(preferred.reteIva, fallback.reteIva);
+    const mergedReteIca = noteCreditInvoice ? Number(noteCreditInvoice.reteIca) || 0 : pickPreferredNumber(preferred.reteIca, fallback.reteIca);
+    const mergedCreditAmount = noteCreditInvoice
+      ? Number(noteCreditInvoice.creditAmount) || 0
+      : preferredClearsCredit
       ? 0
       : Math.max(Number(preferred.creditAmount) || 0, Number(fallback.creditAmount) || 0);
-    const mergedPaidAmount = preferredClearsPayment
+    const mergedPaidAmount = noteCreditInvoice
+      ? Number(noteCreditInvoice.paidAmount) || 0
+      : preferredClearsPayment
       ? 0
       : Math.max(Number(preferred.paidAmount) || 0, Number(fallback.paidAmount) || 0);
-    const mergedPaidWithWithholdings = Math.max(
-      Number(preferred.paidWithWithholdings) || 0,
-      Number(fallback.paidWithWithholdings) || 0
-    );
+    const mergedPaidWithWithholdings = noteCreditInvoice
+      ? Number(noteCreditInvoice.paidWithWithholdings) || 0
+      : Math.max(
+        Number(preferred.paidWithWithholdings) || 0,
+        Number(fallback.paidWithWithholdings) || 0
+      );
     const mergedExpectedDebt = Math.max(
       0,
       mergedTotal - mergedPaidAmount - mergedCreditAmount - mergedReteFuente - mergedReteIva - mergedReteIca
@@ -296,22 +303,26 @@ export const supabaseService = {
       isSynced: Boolean(preferred.isSynced || fallback.isSynced),
       bankCommission: pickPositive(preferred.bankCommission, fallback.bankCommission),
       creditAmount: mergedCreditAmount,
-      creditDate: preferredClearsCredit
+      creditDate: noteCreditInvoice
+        ? noteCreditInvoice.creditDate || ''
+        : preferredClearsCredit
         ? ''
         : pickText(preferred.creditDate, fallback.creditDate, this.hasMeaningfulDate.bind(this)),
-      paymentDate: preferredClearsPayment
+      paymentDate: noteCreditInvoice
+        ? noteCreditInvoice.paymentDate || ''
+        : preferredClearsPayment
         ? ''
         : pickText(preferred.paymentDate, fallback.paymentDate, this.hasMeaningfulDate.bind(this)),
       paidAmount: mergedPaidAmount,
       paidWithWithholdings: mergedPaidWithWithholdings,
       status:
-        preferredClearsPayment && preferredClearsCredit
-          ? 'Pendiente por pagar'
-          : preferredStatus === 'Pagada' || fallbackStatus === 'Pagada'
+        preferredIsNoteCredit || fallbackIsNoteCredit
+          ? NOTE_CREDIT_STATUS
+          : preferredClearsPayment && preferredClearsCredit
+            ? 'Pendiente por pagar'
+            : preferredStatus === 'Pagada' || fallbackStatus === 'Pagada'
           ? 'Pagada'
-          : preferredIsNoteCredit || fallbackIsNoteCredit
-            ? NOTE_CREDIT_STATUS
-            : this.normalizePaymentStatus(preferred.status || fallback.status),
+          : this.normalizePaymentStatus(preferred.status || fallback.status),
     };
   },
 
@@ -666,11 +677,6 @@ export const supabaseService = {
           paidAmount: this.toNumber(this.getFirstDefined(row, ['paidAmount', 'paid_amount', 'valor_recaudado', 'recaudado'])),
           paidWithWithholdings: this.toNumber(this.getFirstDefined(row, ['paidWithWithholdings', 'paid_with_withholdings'])),
         };
-
-        const computedTotalFromBase = (normalizedInvoice.subtotal || 0) + (normalizedInvoice.iva || 0);
-        if (computedTotalFromBase > 0 && Math.abs((normalizedInvoice.total || 0) - computedTotalFromBase) > 2) {
-          normalizedInvoice.total = computedTotalFromBase;
-        }
 
         if ((normalizedInvoice.total || 0) > 0 && (normalizedInvoice.subtotal || 0) <= 0) {
           normalizedInvoice.subtotal = Math.max(0, (normalizedInvoice.total || 0) - (normalizedInvoice.iva || 0));

@@ -39,7 +39,8 @@ export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData:
 
       ERRORES CRITICOS A CORREGIR:
       1. CRUCE DE CAMPOS: Si el current_mapping.client es una frase larga y tecnica, es un error.
-      2. VALORES EN CERO: Si current_mapping.total o iva es 0 pero ves valores numericos en siigo_raw_source.financials, extraelos y corrigelos.
+      2. VALORES EN CERO: Si current_mapping.total es 0 pero ves un total explicito en siigo_raw_source.financials, corrigelo.
+      2B. IVA: NO calcules IVA por diferencia entre total y subtotal. Solo corrige IVA si existe un campo/impuesto IVA explicito en taxes o cost. Si no hay IVA explicito, manten 0.
       3. DESCRIPCION: Asegurate de que la descripcion sea la del servicio prestado, no el nombre del cliente.
 
       REGLA DE ORO: El nombre del cliente nunca es una descripcion tecnica.
@@ -73,14 +74,16 @@ export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData:
       const corr = corrections.find((c) => c.index === idx);
       if (corr && corr.hasChanges) {
         const total = corr.correctedTotal !== undefined ? corr.correctedTotal : inv.total;
-        const iva = corr.correctedIva !== undefined ? corr.correctedIva : inv.iva;
+        const explicitTaxSource = rawSiigoData[idx]?.taxes || rawSiigoData[idx]?.cost?.iva;
+        const hasExplicitIva = JSON.stringify(explicitTaxSource || '').toLowerCase().includes('iva') || Number(rawSiigoData[idx]?.cost?.iva || 0) > 0;
+        const iva = hasExplicitIva && corr.correctedIva !== undefined ? corr.correctedIva : inv.iva;
         return {
           ...inv,
           clientName: inv.clientName,
           description: corr.correctedDescription || inv.description,
           total,
           iva,
-          subtotal: total - iva,
+          subtotal: inv.subtotal,
           debtValue: inv.status === 'Pagada' ? 0 : total
         };
       }

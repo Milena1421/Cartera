@@ -378,6 +378,7 @@ const App: React.FC = () => {
             !currentIsPlaceholder &&
             hasMeaningfulFinancialValues(currentInvoice) &&
             !hasMeaningfulFinancialValues(invoice);
+          const currentIsNoteCredit = isNoteCreditStatus(currentInvoice.status);
           return {
             ...currentInvoice,
             ...invoice,
@@ -388,15 +389,15 @@ const App: React.FC = () => {
             description: currentIsPlaceholder || hasMeaningfulDescription(invoice.description) ? invoice.description : currentInvoice.description,
             date: currentIsPlaceholder || hasMeaningfulDate(invoice.date) ? invoice.date : currentInvoice.date,
             dueDate: currentIsPlaceholder || hasMeaningfulDate(invoice.dueDate) ? invoice.dueDate : currentInvoice.dueDate,
-            subtotal: keepCurrentFinancials ? currentInvoice.subtotal : invoice.subtotal,
-            iva: keepCurrentFinancials ? currentInvoice.iva : invoice.iva,
-            total: keepCurrentFinancials ? currentInvoice.total : invoice.total,
-            debtValue: keepCurrentFinancials ? currentInvoice.debtValue : invoice.debtValue,
+            subtotal: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.subtotal : invoice.subtotal,
+            iva: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.iva : invoice.iva,
+            total: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.total : invoice.total,
+            debtValue: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.debtValue : invoice.debtValue,
             paidAmount: currentInvoice.paidAmount,
             creditAmount: currentInvoice.creditAmount,
             paymentDate: currentInvoice.paymentDate,
             creditDate: currentInvoice.creditDate,
-            status: invoice.status || currentInvoice.status,
+            status: currentIsNoteCredit ? currentInvoice.status : (invoice.status || currentInvoice.status),
             observations: currentInvoice.observations || '',
             documentUrl: currentInvoice.documentUrl,
             isSynced: currentInvoice.isSynced,
@@ -453,6 +454,7 @@ const App: React.FC = () => {
               !currentIsPlaceholder &&
               hasMeaningfulFinancialValues(currentInvoice) &&
               !importedHasFinancials;
+            const currentIsNoteCredit = isNoteCreditStatus(currentInvoice.status);
             return {
               ...currentInvoice,
               ...invoice,
@@ -463,10 +465,10 @@ const App: React.FC = () => {
               description: currentIsPlaceholder || hasMeaningfulDescription(invoice.description) ? invoice.description : currentInvoice.description,
               date: currentIsPlaceholder || hasMeaningfulDate(invoice.date) ? invoice.date : currentInvoice.date,
               dueDate: currentIsPlaceholder || hasMeaningfulDate(invoice.dueDate) ? invoice.dueDate : currentInvoice.dueDate,
-              subtotal: keepCurrentFinancials ? currentInvoice.subtotal : invoice.subtotal,
-              iva: keepCurrentFinancials ? currentInvoice.iva : invoice.iva,
-              total: keepCurrentFinancials ? currentInvoice.total : invoice.total,
-              debtValue: keepCurrentFinancials ? currentInvoice.debtValue : invoice.debtValue,
+              subtotal: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.subtotal : invoice.subtotal,
+              iva: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.iva : invoice.iva,
+              total: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.total : invoice.total,
+              debtValue: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.debtValue : invoice.debtValue,
               paidAmount: currentInvoice.paidAmount,
               creditAmount: currentInvoice.creditAmount,
               paymentDate: currentInvoice.paymentDate,

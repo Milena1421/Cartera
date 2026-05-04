@@ -339,10 +339,6 @@ export class SiigoService {
       if (ivaFromItems > 0) iva = ivaFromItems;
     }
 
-    if (subtotal > 0 && iva <= 0 && total > subtotal) {
-      iva = Math.max(0, total - subtotal);
-    }
-
     if (total > 0 && subtotal <= 0) {
       subtotal = Math.max(0, total - iva);
     }
