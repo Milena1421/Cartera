@@ -122,6 +122,17 @@ const amountsMatch = (transactionAmount: number, invoiceAmount: number) => {
   return Math.abs(tx - inv) <= 2;
 };
 
+const roundCurrency = (value: number) => Math.round(value * 100) / 100;
+
+const calculateRemainingDebt = (invoice: Invoice, paidAmount: number) => {
+  const totalWithholdings =
+    (Number(invoice.reteFuente) || 0) +
+    (Number(invoice.reteIva) || 0) +
+    (Number(invoice.reteIca) || 0);
+  const creditAmount = Number(invoice.creditAmount) || 0;
+  return Math.max(0, roundCurrency((Number(invoice.total) || 0) - paidAmount - creditAmount - totalWithholdings));
+};
+
 const invoiceHasRegisteredPayment = (invoice: Invoice) =>
   Boolean(invoice.paymentDate) || (Number(invoice.paidAmount) || 0) > 0;
 
@@ -489,19 +500,14 @@ const ReconciliationPanel: React.FC<Props> = ({
         if (paymentAmount <= 0) return;
 
         const paidAmount = paymentAmount;
-        const creditAmount = Number(matchedInvoice.creditAmount) || 0;
-        const totalWithholdings =
-          (Number(matchedInvoice.reteFuente) || 0) +
-          (Number(matchedInvoice.reteIva) || 0) +
-          (Number(matchedInvoice.reteIca) || 0);
-        const nextDebt = Math.max(0, (Number(matchedInvoice.total) || 0) - paidAmount - creditAmount - totalWithholdings);
+        const nextDebt = calculateRemainingDebt(matchedInvoice, paidAmount);
 
         paidInvoicesById.set(matchedInvoice.id, {
           ...matchedInvoice,
           paymentDate: transaction.date || matchedInvoice.paymentDate,
           paidAmount,
           debtValue: nextDebt,
-          status: nextDebt <= 2 ? 'Pagada' : matchedInvoice.status,
+          status: nextDebt <= 0 ? 'Pagada' : 'Pendiente por pagar',
         });
       });
 

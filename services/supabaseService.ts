@@ -60,6 +60,28 @@ export const supabaseService = {
     return this.normalizePaymentStatus(value) === NOTE_CREDIT_STATUS;
   },
 
+  roundCurrency(value: number) {
+    return Math.round(value * 100) / 100;
+  },
+
+  calculateDebt(invoice: Partial<Invoice>) {
+    if (this.isNoteCreditStatus(invoice.status)) return 0;
+    const total = Number(invoice.total) || 0;
+    const deductions =
+      (Number(invoice.paidAmount) || 0) +
+      (Number(invoice.creditAmount) || 0) +
+      (Number(invoice.reteFuente) || 0) +
+      (Number(invoice.reteIva) || 0) +
+      (Number(invoice.reteIca) || 0);
+    return Math.max(0, this.roundCurrency(total - deductions));
+  },
+
+  resolveStatusFromDebt(status: Invoice['status'] | undefined, debt: number): Invoice['status'] {
+    if (this.isNoteCreditStatus(status)) return NOTE_CREDIT_STATUS;
+    if (debt > 0) return 'Pendiente por pagar';
+    return this.normalizePaymentStatus(status);
+  },
+
   getFirstDefined(row: any, keys: string[]) {
     for (const key of keys) {
       if (row?.[key] !== undefined && row?.[key] !== null && row?.[key] !== '') {
@@ -170,13 +192,7 @@ export const supabaseService = {
     const debt = Number(invoice.debtValue) || 0;
     if (total <= 0 || debt < 0) return false;
     if (this.isNoteCreditStatus(invoice.status)) return debt === 0;
-    const deductions =
-      (Number(invoice.paidAmount) || 0) +
-      (Number(invoice.creditAmount) || 0) +
-      (Number(invoice.reteFuente) || 0) +
-      (Number(invoice.reteIva) || 0) +
-      (Number(invoice.reteIca) || 0);
-    const expectedDebt = Math.max(0, total - deductions);
+    const expectedDebt = this.calculateDebt(invoice);
     return Math.abs(expectedDebt - debt) <= 2;
   },
 
@@ -536,6 +552,8 @@ export const supabaseService = {
 
       // Mapeo limpio de datos
       const dataToSync = finalInvoices.map(inv => {
+        const debtValue = this.calculateDebt(inv);
+        const status = this.resolveStatusFromDebt(inv.status, debtValue);
         const payload: any = {
           id: inv.id,
           clientName: inv.clientName || '',
@@ -552,8 +570,8 @@ export const supabaseService = {
           reteFuente: Number(inv.reteFuente) || 0,
           reteIva: Number(inv.reteIva) || 0,
           reteIca: Number(inv.reteIca) || 0,
-          status: this.normalizePaymentStatus(inv.status),
-          debtValue: this.isNoteCreditStatus(inv.status) ? 0 : Number(inv.debtValue) || 0,
+          status,
+          debtValue,
           observations: this.sanitizeObservation(inv.observations, inv),
           moraDays: Number(inv.moraDays) || 0,
           documentUrl: inv.documentUrl || null,
@@ -611,12 +629,12 @@ export const supabaseService = {
       const paymentSyncPayload = dataToSync
         .map((invoice) => ({
           invoiceNumber: this.normalizeInvoiceNumber(invoice.invoiceNumber),
-          status: invoice.status,
-          debtValue: Number(invoice.debtValue) || 0,
+          debtValue: this.calculateDebt(invoice),
           paymentDate: invoice.paymentDate || null,
           paidAmount: Number(invoice.paidAmount) || 0,
           creditDate: invoice.creditDate || null,
           creditAmount: Number(invoice.creditAmount) || 0,
+          status: this.resolveStatusFromDebt(invoice.status, this.calculateDebt(invoice)),
         }))
         .filter((invoice) => invoice.invoiceNumber);
 
@@ -718,20 +736,15 @@ export const supabaseService = {
         }
 
         if (normalizedInvoice.total > 0) {
-          const totalDeductions =
-            (normalizedInvoice.paidAmount || 0) +
-            (normalizedInvoice.creditAmount || 0) +
-            (normalizedInvoice.reteFuente || 0) +
-            (normalizedInvoice.reteIva || 0) +
-            (normalizedInvoice.reteIca || 0);
           const expectedDebt =
-            normalizedInvoice.status === 'Pagada' || this.isNoteCreditStatus(normalizedInvoice.status)
+            this.isNoteCreditStatus(normalizedInvoice.status)
               ? 0
-              : Math.max(0, normalizedInvoice.total - totalDeductions);
+              : this.calculateDebt(normalizedInvoice);
 
           if (Math.abs((normalizedInvoice.debtValue || 0) - expectedDebt) > 2) {
             normalizedInvoice.debtValue = expectedDebt;
           }
+          normalizedInvoice.status = this.resolveStatusFromDebt(normalizedInvoice.status, normalizedInvoice.debtValue || 0);
         }
 
         return normalizedInvoice;

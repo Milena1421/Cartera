@@ -56,6 +56,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     const parsed = Number(normalized);
     return Number.isFinite(parsed) ? parsed : 0;
   };
+  const roundCurrency = (value: number) => Math.round(value * 100) / 100;
 
   const [formData, setFormData] = useState({
     clientName: '',
@@ -153,9 +154,15 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     const ri = parseNumericInput(formData.reteIva);
     const rc = parseNumericInput(formData.reteIca);
 
-    const totalDeductions = paidNum + creditNum + rf + ri + rc;
     const normalizedStatus = normalizePaymentStatus(formData.status);
-    const debt = normalizedStatus === 'Pagada' || normalizedStatus === 'Nota cr\u00E9dito' ? 0 : Math.max(0, totalNum - totalDeductions);
+    const debt = normalizedStatus === NOTE_CREDIT_STATUS
+      ? 0
+      : Math.max(0, roundCurrency(totalNum - paidNum - creditNum - rf - ri - rc));
+    const status = normalizedStatus === NOTE_CREDIT_STATUS
+      ? NOTE_CREDIT_STATUS
+      : debt > 0
+        ? 'Pendiente por pagar'
+        : normalizedStatus;
 
     const invoiceData: Invoice = {
       ...(initialData || {}),
@@ -174,7 +181,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
       reteFuente: rf,
       reteIva: ri,
       reteIca: rc,
-      status: normalizedStatus,
+      status,
       paymentDate: formData.paymentDate || undefined,
       creditDate: formData.creditDate || undefined,
       creditAmount: creditNum,

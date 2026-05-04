@@ -1,4 +1,4 @@
-import { Invoice, PaymentStatus } from '../types';
+﻿import { Invoice, PaymentStatus } from '../types';
 
 const normalizeInvoiceNumber = (value?: string) => {
   const clean = String(value || '')
@@ -12,7 +12,9 @@ const normalizeInvoiceNumber = (value?: string) => {
 };
 
 const isNoteCreditStatus = (status: PaymentStatus) =>
-  status === 'Nota cr�dito' || status === 'Nota crédito' || status === 'Nota cr?dito';
+  String(status || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]/g, '') === 'notacredito';
+
+const roundCurrency = (value: number) => Math.round(value * 100) / 100;
 
 const parseDelimited = (text: string, delimiter = ';'): string[][] => {
   const rows: string[][] = [];
@@ -147,12 +149,21 @@ export const parseCarteraCsv = (text: string): Invoice[] => {
     const providedDebt = parseNumber(row[debtIndex] || '');
     const totalDeductions = paidAmount + creditAmount + reteFuente + reteIva + reteIca;
     const statusText = cleanText(row[statusIndex] || '').toUpperCase();
-    const status: PaymentStatus =
+    const rawStatus: PaymentStatus =
       statusText === 'PAGADA'
         ? 'Pagada'
-        : statusText === 'NOTA CRÉDITO' || statusText === 'NOTA CREDITO'
-          ? 'Nota cr�dito'
+        : statusText === 'NOTA CRÃ‰DITO' || statusText === 'NOTA CREDITO'
+          ? 'Nota crédito'
           : 'Pendiente por pagar';
+    const calculatedDebt = isNoteCreditStatus(rawStatus)
+      ? 0
+      : Math.max(0, roundCurrency(total - totalDeductions));
+    const debtValue = providedDebt > 0 ? providedDebt : calculatedDebt;
+    const status: PaymentStatus = isNoteCreditStatus(rawStatus)
+      ? rawStatus
+      : debtValue > 0
+        ? 'Pendiente por pagar'
+        : rawStatus;
 
     return {
       id: `csv-${Date.now()}-${idx}`,
@@ -169,11 +180,7 @@ export const parseCarteraCsv = (text: string): Invoice[] => {
       reteIva,
       reteIca,
       status,
-      debtValue: status === 'Pagada' || isNoteCreditStatus(status)
-        ? 0
-        : providedDebt > 0
-          ? providedDebt
-          : Math.max(0, total - totalDeductions),
+      debtValue,
       observations: cleanText(row[observationsIndex] || ''),
       moraDays: parseNumber(row[moraIndex] || ''),
       bankCommission,
