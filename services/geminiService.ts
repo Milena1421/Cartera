@@ -1,5 +1,5 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import { Invoice, AIAuditFinding } from "../types";
+import { GoogleGenAI, Type, createPartFromBase64, createPartFromText } from "@google/genai";
+import { Invoice, AIAuditFinding, BankTransaction } from "../types";
 
 export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData: any[]): Promise<Invoice[]> => {
   if (mappedInvoices.length === 0) return [];
@@ -149,6 +149,81 @@ export const parseCSVWithAI = async (rawCsvText: string): Promise<Invoice[]> => 
       .filter((item) => item.clientName && item.invoiceNumber);
   } catch (error) {
     console.error("Falla en Auditoria de IA (parseCSVWithAI):", error);
+    return [];
+  }
+};
+
+const fileToBase64 = (file: File): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      resolve(result.includes(',') ? result.split(',')[1] : result);
+    };
+    reader.onerror = () => reject(reader.error || new Error('No se pudo leer el archivo.'));
+    reader.readAsDataURL(file);
+  });
+
+export const parseBankStatementPdfWithAI = async (file: File): Promise<BankTransaction[]> => {
+  if (!file || file.size === 0) return [];
+
+  try {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
+      return [];
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const base64Pdf = await fileToBase64(file);
+
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: [
+        createPartFromBase64(base64Pdf, file.type || 'application/pdf'),
+        createPartFromText(`Extrae del extracto bancario UNICAMENTE movimientos donde ingreso dinero al banco.
+
+Reglas:
+- Incluir solo creditos, consignaciones, transferencias recibidas, pagos recibidos, recaudos o abonos a favor.
+- Excluir debitos, retiros, comisiones, impuestos, IVA, GMF, saldos, encabezados, totales, subtotales y lineas sin valor real.
+- No inventes datos. Si no hay NIT, referencia o factura, deja el campo vacio.
+- El valor debe ser positivo, en pesos colombianos, sin separadores.
+- La fecha debe salir en formato YYYY-MM-DD cuando sea posible.
+- La descripcion debe contener tercero/pagador y concepto visible.
+- En reference coloca NIT, documento, comprobante o numero de factura visible que ayude al cruce.`)
+      ],
+      config: {
+        systemInstruction: "Eres un extractor contable. Devuelve JSON estricto. Si el PDF es escaneado, lee visualmente la tabla. Omite cualquier fila dudosa o sin ingreso bancario claro.",
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              date: { type: Type.STRING },
+              description: { type: Type.STRING },
+              amount: { type: Type.NUMBER },
+              reference: { type: Type.STRING },
+            },
+            required: ["date", "description", "amount"],
+          },
+        },
+      },
+    });
+
+    const extracted: Array<Partial<BankTransaction>> = JSON.parse(response.text || "[]");
+    return extracted
+      .map((item, index) => ({
+        id: `bank-pdf-${Date.now()}-${index}`,
+        date: String(item.date || '').trim(),
+        description: String(item.description || 'Movimiento bancario').trim(),
+        amount: Math.abs(Number(item.amount || 0)),
+        reference: String(item.reference || '').trim(),
+        isMatched: false,
+      }))
+      .filter((transaction) => transaction.amount > 0 && transaction.description !== 'Movimiento bancario');
+  } catch (error) {
+    console.error("Falla extrayendo extracto bancario PDF:", error);
     return [];
   }
 };

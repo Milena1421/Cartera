@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Upload, CheckCircle2, AlertCircle, Landmark, Edit3, Save, X } from 'lucide-react';
 import { BankTransaction, Invoice } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import { parseBankStatementPdfWithAI } from '../services/geminiService';
 
 interface ReconciliationMatch {
   transaction: BankTransaction;
@@ -78,17 +79,30 @@ const amountsMatch = (transactionAmount: number, invoiceAmount: number) => {
   return Math.abs(tx - inv) <= 2;
 };
 
+const invoiceIsPending = (invoice: Invoice) => invoice.status !== 'Pagada' && (invoice.debtValue || 0) > 0;
+
+const compareInvoicesByPaymentPriority = (a: Invoice, b: Invoice) => {
+  const pendingDiff = Number(invoiceIsPending(b)) - Number(invoiceIsPending(a));
+  if (pendingDiff !== 0) return pendingDiff;
+  return new Date(a.date || '1900-01-01').getTime() - new Date(b.date || '1900-01-01').getTime();
+};
+
 const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[]) => {
   const refKey = normalizeInvoiceKey(transaction.reference);
   const descriptionKey = normalizeInvoiceKey(transaction.description);
+  const documentCandidates = extractDocumentCandidates(`${transaction.reference || ''} ${transaction.description || ''}`);
 
   if (refKey) {
-    const matchedByReference = invoices.find((invoice) => normalizeInvoiceKey(invoice.invoiceNumber) === refKey);
+    const matchedByReference = [...invoices]
+      .sort(compareInvoicesByPaymentPriority)
+      .find((invoice) => normalizeInvoiceKey(invoice.invoiceNumber) === refKey);
     if (matchedByReference) return matchedByReference;
   }
 
   if (descriptionKey) {
-    const matchedByDescriptionInvoice = invoices.find((invoice) =>
+    const matchedByDescriptionInvoice = [...invoices]
+      .sort(compareInvoicesByPaymentPriority)
+      .find((invoice) =>
       descriptionKey.includes(normalizeInvoiceKey(invoice.invoiceNumber))
     );
     if (matchedByDescriptionInvoice) return matchedByDescriptionInvoice;
@@ -105,25 +119,32 @@ const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[
       const amountMatchesDebt = amountsMatch(transactionAmount, invoice.debtValue);
       const amountMatchesPaid = amountsMatch(transactionAmount, invoice.paidAmount || 0);
       const amountMatchesCredit = amountsMatch(transactionAmount, invoice.creditAmount || 0);
+      const documentMatches = documentCandidates.includes(normalizeDocumentNumber(invoice.documentNumber));
 
       let score = 0;
+      if (documentMatches) score += 60;
       if (sharedTokenCount > 0) score += sharedTokenCount * 20;
-      if (amountMatchesTotal) score += 35;
-      if (amountMatchesDebt) score += 30;
+      if (amountMatchesDebt) score += 40;
+      if (amountMatchesTotal) score += 30;
       if (amountMatchesPaid) score += 18;
       if (amountMatchesCredit) score += 18;
+      if (invoiceIsPending(invoice)) score += 10;
 
       return { invoice, score };
     })
     .filter((candidate) => candidate.score > 0)
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      const scoreDiff = b.score - a.score;
+      if (scoreDiff !== 0) return scoreDiff;
+      return compareInvoicesByPaymentPriority(a.invoice, b.invoice);
+    });
 
   if (scoredCandidates.length === 0) return undefined;
 
   const [bestCandidate, secondCandidate] = scoredCandidates;
   if (!bestCandidate) return undefined;
 
-  if (bestCandidate.score >= 35 && (!secondCandidate || bestCandidate.score > secondCandidate.score)) {
+  if (bestCandidate.score >= 40 && (!secondCandidate || bestCandidate.score >= secondCandidate.score)) {
     return bestCandidate.invoice;
   }
 
@@ -258,6 +279,8 @@ const getMonthFromDate = (value?: string) => {
 
 const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransactionsChange, selectedMonth = 'all' }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [isImportingStatement, setIsImportingStatement] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<TransactionEditForm>({
     date: '',
@@ -292,6 +315,21 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
     const file = event.target.files?.[0];
     if (!file) return;
 
+    setImportError(null);
+    setIsImportingStatement(true);
+
+    try {
+      const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+      if (isPdf) {
+        const parsedPdfTransactions = await parseBankStatementPdfWithAI(file);
+        if (parsedPdfTransactions.length === 0) {
+          setImportError('No pude extraer ingresos bancarios claros del PDF. Revisa que el extracto sea legible o carga un CSV del banco.');
+          return;
+        }
+        onTransactionsChange(parsedPdfTransactions);
+        return;
+      }
+
     const text = await file.text();
     const lines = text
       .split(/\r?\n/g)
@@ -299,7 +337,7 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
       .filter(Boolean);
 
     if (lines.length < 2) {
-      if (inputRef.current) inputRef.current.value = '';
+      setImportError('El archivo no tiene movimientos suficientes para importar.');
       return;
     }
 
@@ -311,8 +349,14 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
 
     const dateIndex = findHeaderIndex(['fecha', 'date']);
     const descriptionIndex = findHeaderIndex(['descripcion', 'description', 'concepto', 'detalle']);
-    const amountIndex = findHeaderIndex(['valor', 'monto', 'amount', 'credito', 'debito']);
+    const creditIndex = findHeaderIndex(['credito', 'crédito', 'ingreso', 'abono', 'consignacion', 'consignación']);
+    const amountIndex = creditIndex >= 0 ? creditIndex : findHeaderIndex(['valor', 'monto', 'amount']);
     const referenceIndex = findHeaderIndex(['referencia', 'reference', 'documento', 'factura']);
+
+    if (descriptionIndex < 0 || amountIndex < 0) {
+      setImportError('No reconocí columnas de descripción y valor. Para PDF usa un extracto legible; para CSV incluye columnas como fecha, descripción, crédito/valor y referencia.');
+      return;
+    }
 
     const parsedTransactions: BankTransaction[] = lines.slice(1).map((line, index) => {
       const cells = splitCsvLine(line, delimiter);
@@ -324,10 +368,18 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
         reference: referenceIndex >= 0 ? (cells[referenceIndex] || '') : '',
         isMatched: false,
       };
-    }).filter((transaction) => transaction.description || transaction.amount || transaction.reference);
+    }).filter((transaction) => transaction.amount > 0 && (transaction.description || transaction.reference));
+
+    if (parsedTransactions.length === 0) {
+      setImportError('No encontré ingresos bancarios con valor mayor a cero en el archivo.');
+      return;
+    }
 
     onTransactionsChange(parsedTransactions);
-    if (inputRef.current) inputRef.current.value = '';
+    } finally {
+      setIsImportingStatement(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
   };
 
   const applyMatches = () => {
@@ -405,15 +457,30 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
           <p className="mt-2 text-xs font-bold text-amber-600">{formatCurrency(summary.unmatchedAmount)}</p>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-white p-5 flex flex-col gap-3">
-          <input ref={inputRef} type="file" accept=".csv,.txt" className="hidden" onChange={handleFileUpload} />
-          <button onClick={() => inputRef.current?.click()} className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#0f172a] text-white px-4 py-3 text-[11px] font-black uppercase tracking-[0.2em]">
-            <Upload size={14} /> Cargar Extracto
+          <input ref={inputRef} type="file" accept=".csv,.txt,.pdf" className="hidden" onChange={handleFileUpload} />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={isImportingStatement}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-[#0f172a] text-white px-4 py-3 text-[11px] font-black uppercase tracking-[0.2em] disabled:opacity-60"
+          >
+            <Upload size={14} /> {isImportingStatement ? 'Leyendo Extracto...' : 'Cargar Extracto'}
           </button>
-          <button onClick={applyMatches} className="w-full flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-slate-700">
+          <button
+            onClick={applyMatches}
+            disabled={isImportingStatement}
+            className="w-full flex items-center justify-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-[11px] font-black uppercase tracking-[0.2em] text-slate-700 disabled:opacity-60"
+          >
             <CheckCircle2 size={14} /> Conciliar
           </button>
         </div>
       </div>
+
+      {importError && (
+        <div className="flex items-start gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-sm font-bold text-amber-700">
+          <AlertCircle size={18} className="mt-0.5 shrink-0" />
+          <span>{importError}</span>
+        </div>
+      )}
 
       <div className="rounded-[1.6rem] border border-slate-200 bg-white overflow-hidden">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
