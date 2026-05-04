@@ -1,5 +1,5 @@
-import React, { useMemo, useRef } from 'react';
-import { Upload, CheckCircle2, AlertCircle, Landmark } from 'lucide-react';
+import React, { useMemo, useRef, useState } from 'react';
+import { Upload, CheckCircle2, AlertCircle, Landmark, Edit3, Save, X } from 'lucide-react';
 import { BankTransaction, Invoice } from '../types';
 import { formatCurrency } from '../utils/formatters';
 
@@ -12,7 +12,16 @@ interface Props {
   invoices: Invoice[];
   transactions: BankTransaction[];
   onTransactionsChange: (transactions: BankTransaction[]) => void;
+  selectedMonth?: string;
 }
+
+type TransactionEditForm = {
+  date: string;
+  description: string;
+  amount: string;
+  reference: string;
+  isMatched: boolean;
+};
 
 const normalizeInvoiceKey = (value?: string) =>
   String(value || '')
@@ -232,24 +241,52 @@ const detectDelimiter = (header: string) => {
   return ',';
 };
 
-const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransactionsChange }) => {
+const getMonthFromDate = (value?: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+
+  const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (isoMatch) return isoMatch[2].padStart(2, '0');
+
+  const localMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
+  if (localMatch) return localMatch[2].padStart(2, '0');
+
+  const parsedDate = new Date(trimmed);
+  if (Number.isNaN(parsedDate.getTime())) return '';
+  return String(parsedDate.getMonth() + 1).padStart(2, '0');
+};
+
+const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransactionsChange, selectedMonth = 'all' }) => {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<TransactionEditForm>({
+    date: '',
+    description: '',
+    amount: '',
+    reference: '',
+    isMatched: false,
+  });
+
+  const filteredTransactions = useMemo(() => {
+    if (selectedMonth === 'all') return transactions;
+    return transactions.filter((transaction) => getMonthFromDate(transaction.date) === selectedMonth);
+  }, [selectedMonth, transactions]);
 
   const matches = useMemo<ReconciliationMatch[]>(() => {
-    return resolveTransactionMatches(transactions, invoices);
-  }, [invoices, transactions]);
+    return resolveTransactionMatches(filteredTransactions, invoices);
+  }, [filteredTransactions, invoices]);
 
   const summary = useMemo(() => {
     const matched = matches.filter((item) => item.matchedInvoice);
     const unmatched = matches.filter((item) => !item.matchedInvoice);
     return {
-      totalTransactions: transactions.length,
+      totalTransactions: filteredTransactions.length,
       matchedCount: matched.length,
       unmatchedCount: unmatched.length,
       matchedAmount: matched.reduce((acc, item) => acc + (item.transaction.amount || 0), 0),
       unmatchedAmount: unmatched.reduce((acc, item) => acc + (item.transaction.amount || 0), 0),
     };
-  }, [matches, transactions]);
+  }, [filteredTransactions, matches]);
 
   const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -294,21 +331,60 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
   };
 
   const applyMatches = () => {
-    const resolvedMatches = resolveTransactionMatches(transactions, invoices);
+    const resolvedMatches = resolveTransactionMatches(filteredTransactions, invoices);
     const matchedTransactionIds = new Set(
       resolvedMatches
         .filter((item) => item.matchedInvoice)
         .map((item) => item.transaction.id)
     );
+    const filteredTransactionIds = new Set(filteredTransactions.map((transaction) => transaction.id));
 
     onTransactionsChange(
       transactions.map((transaction) => {
+        if (!filteredTransactionIds.has(transaction.id)) return transaction;
+
         return {
           ...transaction,
           isMatched: matchedTransactionIds.has(transaction.id),
         };
       })
     );
+  };
+
+  const openEditModal = (transaction: BankTransaction) => {
+    setEditingTransactionId(transaction.id);
+    setEditForm({
+      date: transaction.date || '',
+      description: transaction.description || '',
+      amount: String(transaction.amount || 0),
+      reference: transaction.reference || '',
+      isMatched: Boolean(transaction.isMatched),
+    });
+  };
+
+  const closeEditModal = () => {
+    setEditingTransactionId(null);
+  };
+
+  const saveEditedTransaction = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingTransactionId) return;
+
+    onTransactionsChange(
+      transactions.map((transaction) => {
+        if (transaction.id !== editingTransactionId) return transaction;
+
+        return {
+          ...transaction,
+          date: editForm.date,
+          description: editForm.description.trim() || 'Movimiento bancario',
+          amount: parseAmount(editForm.amount),
+          reference: editForm.reference.trim(),
+          isMatched: editForm.isMatched,
+        };
+      })
+    );
+    closeEditModal();
   };
 
   return (
@@ -343,6 +419,11 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
         <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
           <Landmark size={18} className="text-blue-500" />
           <h2 className="text-sm font-black uppercase tracking-[0.22em] text-slate-700">Conciliacion bancaria</h2>
+          {selectedMonth !== 'all' && (
+            <span className="ml-auto rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-blue-600">
+              Mes filtrado
+            </span>
+          )}
         </div>
         <div className="divide-y divide-slate-100">
           {matches.length === 0 ? (
@@ -351,7 +432,7 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
             </div>
           ) : (
             matches.map(({ transaction, matchedInvoice }) => (
-              <div key={transaction.id} className="px-6 py-4 grid grid-cols-1 xl:grid-cols-[160px_1fr_220px_200px] gap-4 items-center">
+              <div key={transaction.id} className="px-6 py-4 grid grid-cols-1 xl:grid-cols-[160px_1fr_220px_200px_52px] gap-4 items-center">
                 <div>
                   <p className="text-xs font-black text-slate-700">{transaction.date || '-'}</p>
                   <p className="text-[11px] font-bold text-slate-400 uppercase tracking-[0.18em] mt-1">
@@ -388,11 +469,117 @@ const ReconciliationPanel: React.FC<Props> = ({ invoices, transactions, onTransa
                     {transaction.isMatched || matchedInvoice ? 'Conciliada' : 'Pendiente'}
                   </span>
                 </div>
+                <div className="flex xl:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => openEditModal(transaction)}
+                    title="Editar movimiento"
+                    className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 text-slate-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600"
+                  >
+                    <Edit3 size={16} />
+                  </button>
+                </div>
               </div>
             ))
           )}
         </div>
       </div>
+
+      {editingTransactionId && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 p-4 backdrop-blur-md">
+          <form onSubmit={saveEditedTransaction} className="w-full max-w-2xl overflow-hidden rounded-[1.5rem] bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 px-6 py-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
+                  <Landmark size={18} />
+                </div>
+                <div>
+                  <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-400">Conciliacion bancaria</p>
+                  <h3 className="text-lg font-black text-slate-900">Editar movimiento</h3>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={closeEditModal}
+                className="flex h-10 w-10 items-center justify-center rounded-xl text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 p-6 md:grid-cols-2">
+              <label className="space-y-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Fecha</span>
+                <input
+                  type="text"
+                  placeholder="YYYY-MM-DD o DD/MM/YYYY"
+                  value={editForm.date}
+                  onChange={(event) => setEditForm({ ...editForm, date: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Valor</span>
+                <input
+                  type="text"
+                  value={editForm.amount}
+                  onChange={(event) => setEditForm({ ...editForm, amount: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="space-y-2 md:col-span-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Descripcion</span>
+                <input
+                  type="text"
+                  value={editForm.description}
+                  onChange={(event) => setEditForm({ ...editForm, description: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="space-y-2">
+                <span className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-400">Referencia</span>
+                <input
+                  type="text"
+                  value={editForm.reference}
+                  onChange={(event) => setEditForm({ ...editForm, reference: event.target.value })}
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:border-blue-400"
+                />
+              </label>
+
+              <label className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={editForm.isMatched}
+                  onChange={(event) => setEditForm({ ...editForm, isMatched: event.target.checked })}
+                  className="h-4 w-4 accent-blue-600"
+                />
+                <span className="text-[11px] font-black uppercase tracking-[0.18em] text-slate-600">
+                  Marcar conciliada
+                </span>
+              </label>
+            </div>
+
+            <div className="flex justify-end gap-3 border-t border-slate-100 bg-slate-50 px-6 py-5">
+              <button
+                type="button"
+                onClick={closeEditModal}
+                className="rounded-xl border border-slate-200 bg-white px-5 py-3 text-[11px] font-black uppercase tracking-[0.18em] text-slate-600"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-[11px] font-black uppercase tracking-[0.18em] text-white"
+              >
+                <Save size={16} /> Guardar
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
     </div>
   );
 };

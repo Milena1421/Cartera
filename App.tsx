@@ -877,6 +877,7 @@ const App: React.FC = () => {
                 invoices={invoices}
                 transactions={bankTransactions}
                 onTransactionsChange={setBankTransactions}
+                selectedMonth={selectedMonth}
               />
             )}
           </div>
