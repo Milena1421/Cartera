@@ -1,6 +1,6 @@
 
 import { createClient } from '@supabase/supabase-js';
-import { Invoice } from '../types';
+import { BankTransaction, Invoice } from '../types';
 
 const SUPABASE_URL = 'https://xfsbogjozqvaphoapqnz.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_PL1m0jMzLteH19aQWAY2oA_pb6-FMIe';
@@ -11,6 +11,7 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const TABLE_NAME = 'invoices';
 const CLIENTS_TABLE_NAME = 'clientes';
 const BUCKET_NAME = 'invoice-documents';
+const BANK_TRANSACTIONS_FOLDER = 'bank-transactions';
 const SYSTEM_GENERATED_OBSERVATIONS = [
   'Pendiente confirmacion de recibido por parte de almacen.',
   'Se solicita envio de RUT actualizado para proceso de pago.',
@@ -93,6 +94,18 @@ export const supabaseService = {
 
   normalizeDocumentNumber(value?: string) {
     return String(value || '').replace(/[^\d]/g, '').trim();
+  },
+
+  sanitizeStorageSegment(value?: string) {
+    return String(value || 'default')
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9_-]/g, '_')
+      .replace(/_+/g, '_') || 'default';
+  },
+
+  getBankTransactionsStoragePath(username?: string) {
+    return `${BANK_TRANSACTIONS_FOLDER}/${this.sanitizeStorageSegment(username)}.json`;
   },
 
   cleanClientName(value?: string) {
@@ -792,6 +805,63 @@ export const supabaseService = {
     } catch (err) {
       console.error('Error critico al eliminar factura:', err);
       throw err;
+    }
+  },
+
+  async fetchBankTransactions(username?: string): Promise<BankTransaction[]> {
+    try {
+      const path = this.getBankTransactionsStoragePath(username);
+      const { data, error } = await supabase.storage
+        .from(BUCKET_NAME)
+        .download(path);
+
+      if (error) {
+        if (!error.message.toLowerCase().includes('not found')) {
+          console.warn('No se pudieron cargar movimientos bancarios:', error.message);
+        }
+        return [];
+      }
+
+      const text = await data.text();
+      const parsed = JSON.parse(text);
+      if (!Array.isArray(parsed)) return [];
+
+      return parsed.map((transaction: any, index: number) => ({
+        id: String(transaction?.id || `bank-cloud-${Date.now()}-${index}`),
+        date: String(transaction?.date || ''),
+        description: String(transaction?.description || 'Movimiento bancario'),
+        amount: this.toNumber(transaction?.amount),
+        reference: transaction?.reference ? String(transaction.reference) : '',
+        isMatched: Boolean(transaction?.isMatched),
+      })).filter((transaction) => transaction.amount > 0);
+    } catch (err) {
+      console.warn('No se pudieron leer movimientos bancarios guardados:', err);
+      return [];
+    }
+  },
+
+  async syncBankTransactions(username: string | undefined, transactions: BankTransaction[]) {
+    try {
+      const path = this.getBankTransactionsStoragePath(username);
+      const payload = JSON.stringify(transactions, null, 2);
+      const file = new Blob([payload], { type: 'application/json' });
+      const { error } = await supabase.storage
+        .from(BUCKET_NAME)
+        .upload(path, file, {
+          cacheControl: '0',
+          contentType: 'application/json',
+          upsert: true,
+        });
+
+      if (error) {
+        console.warn('No se pudieron guardar movimientos bancarios:', error.message);
+        return false;
+      }
+
+      return true;
+    } catch (err) {
+      console.warn('No se pudieron sincronizar movimientos bancarios:', err);
+      return false;
     }
   },
 

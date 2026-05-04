@@ -167,13 +167,58 @@ const setStoredDeletedInvoiceNumbers = (values: string[]) => {
 const getBankTransactionsStorageKey = (username?: string) =>
   `${BANK_TRANSACTIONS_STORAGE_KEY}_${username || 'default'}`;
 
+const normalizeBankTransactionText = (value?: string) =>
+  String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const getBankTransactionMergeKey = (transaction: BankTransaction) => {
+  const date = String(transaction.date || '').trim();
+  const amount = Math.round(Math.abs(Number(transaction.amount) || 0));
+  const description = normalizeBankTransactionText(transaction.description).slice(0, 80);
+  const reference = normalizeBankTransactionText(transaction.reference).slice(0, 80);
+  return `${date}|${amount}|${description}|${reference}`;
+};
+
+const mergeBankTransactions = (...transactionLists: BankTransaction[][]) => {
+  const merged = new Map<string, BankTransaction>();
+
+  transactionLists.flat().forEach((transaction) => {
+    const normalized: BankTransaction = {
+      id: String(transaction?.id || `bank-${Date.now()}-${Math.random()}`),
+      date: String(transaction?.date || ''),
+      description: String(transaction?.description || 'Movimiento bancario'),
+      amount: Number(transaction?.amount) || 0,
+      reference: transaction?.reference ? String(transaction.reference) : '',
+      isMatched: Boolean(transaction?.isMatched),
+    };
+    if (normalized.amount <= 0) return;
+
+    const key = getBankTransactionMergeKey(normalized);
+    const current = merged.get(key);
+    merged.set(key, {
+      ...current,
+      ...normalized,
+      isMatched: Boolean(current?.isMatched || normalized.isMatched),
+    });
+  });
+
+  return Array.from(merged.values()).sort(
+    (a, b) => new Date(b.date || '1900-01-01').getTime() - new Date(a.date || '1900-01-01').getTime()
+  );
+};
+
 const getStoredBankTransactions = (username?: string): BankTransaction[] => {
   if (typeof window === 'undefined') return [];
   try {
     const raw = window.localStorage.getItem(getBankTransactionsStorageKey(username));
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    return parsed
+    return mergeBankTransactions(parsed
       .map((transaction) => ({
         id: String(transaction?.id || `bank-${Date.now()}-${Math.random()}`),
         date: String(transaction?.date || ''),
@@ -182,7 +227,7 @@ const getStoredBankTransactions = (username?: string): BankTransaction[] => {
         reference: transaction?.reference ? String(transaction.reference) : '',
         isMatched: Boolean(transaction?.isMatched),
       }))
-      .filter((transaction) => transaction.description || transaction.amount || transaction.reference);
+      .filter((transaction) => transaction.description || transaction.amount || transaction.reference));
   } catch {
     return [];
   }
@@ -231,9 +276,17 @@ const App: React.FC = () => {
   const canModifyInvoices = currentUser?.role === 'admin';
   const deletedInvoiceNumbersSet = useMemo(() => new Set(deletedInvoiceNumbers), [deletedInvoiceNumbers]);
 
-  const persistBankTransactions = useCallback((nextTransactions: BankTransaction[]) => {
-    setBankTransactions(nextTransactions);
-    setStoredBankTransactions(currentUser?.username, nextTransactions);
+  const persistBankTransactions = useCallback(async (nextTransactions: BankTransaction[]) => {
+    const normalizedTransactions = mergeBankTransactions(nextTransactions);
+    setBankTransactions(normalizedTransactions);
+    setStoredBankTransactions(currentUser?.username, normalizedTransactions);
+
+    if (!currentUser?.username) return;
+
+    const saved = await supabaseService.syncBankTransactions(currentUser.username, normalizedTransactions);
+    if (!saved) {
+      setErrorMessage('La conciliacion quedo guardada localmente, pero no se pudo sincronizar con produccion.');
+    }
   }, [currentUser?.username]);
 
   const requireAdminAccess = () => {
@@ -350,6 +403,25 @@ const App: React.FC = () => {
       setIsSyncing(false);
     }
   }, [currentUser, deletedInvoiceNumbersSet]);
+
+  const loadBankTransactions = useCallback(async () => {
+    if (!currentUser?.username) {
+      setBankTransactions([]);
+      return;
+    }
+
+    const localTransactions = getStoredBankTransactions(currentUser.username);
+    setBankTransactions(localTransactions);
+
+    const cloudTransactions = await supabaseService.fetchBankTransactions(currentUser.username);
+    const mergedTransactions = mergeBankTransactions(cloudTransactions, localTransactions);
+    setBankTransactions(mergedTransactions);
+    setStoredBankTransactions(currentUser.username, mergedTransactions);
+
+    if (mergedTransactions.length > 0) {
+      await supabaseService.syncBankTransactions(currentUser.username, mergedTransactions);
+    }
+  }, [currentUser?.username]);
 
   const syncNewInvoices = useCallback(async () => {
     if (!requireAdminAccess()) return;
@@ -758,6 +830,10 @@ const App: React.FC = () => {
   useEffect(() => {
     loadInitialData();
   }, [loadInitialData]);
+
+  useEffect(() => {
+    loadBankTransactions();
+  }, [loadBankTransactions]);
 
   useEffect(() => {
     if (!canModifyInvoices && activeView === 'conciliacion') {
