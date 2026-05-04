@@ -129,8 +129,15 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     // Serve static files in production
-    app.use(express.static(distDir));
+    app.use(express.static(distDir, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-store');
+        }
+      },
+    }));
     app.use((_req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
       res.sendFile(path.join(distDir, 'index.html'));
     });
   }
