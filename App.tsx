@@ -942,6 +942,11 @@ const App: React.FC = () => {
                 onTransactionsChange={persistBankTransactions}
                 selectedMonth={selectedMonth}
                 onApplyInvoicePayments={handleReconciliationPayments}
+                onEditInvoice={(invoice) => {
+                  setSelectedInvoiceId(invoice.id);
+                  setEditingInvoice(invoice);
+                  setIsManualModalOpen(true);
+                }}
               />
             )}
           </div>

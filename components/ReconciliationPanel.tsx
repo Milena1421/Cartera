@@ -15,6 +15,7 @@ interface Props {
   onTransactionsChange: (transactions: BankTransaction[]) => void;
   selectedMonth?: string;
   onApplyInvoicePayments?: (invoices: Invoice[]) => Promise<void> | void;
+  onEditInvoice?: (invoice: Invoice) => void;
 }
 
 type TransactionEditForm = {
@@ -330,6 +331,7 @@ const ReconciliationPanel: React.FC<Props> = ({
   onTransactionsChange,
   selectedMonth = 'all',
   onApplyInvoicePayments,
+  onEditInvoice,
 }) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isImportingStatement, setIsImportingStatement] = useState(false);
@@ -615,13 +617,25 @@ const ReconciliationPanel: React.FC<Props> = ({
                     Ref: {transaction.reference || 'Sin referencia'}
                   </p>
                 </div>
-                <div>
+                <div className="min-w-0">
                   {matchedInvoice ? (
-                    <>
-                      <p className="text-xs font-black text-emerald-600 uppercase tracking-[0.18em]">Factura encontrada</p>
-                      <p className="mt-1 text-sm font-black text-slate-800">{matchedInvoice.invoiceNumber}</p>
-                      <p className="text-xs font-medium text-slate-500 truncate">{matchedInvoice.clientName}</p>
-                    </>
+                    <div className="flex items-start gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-black text-emerald-600 uppercase tracking-[0.18em]">Factura encontrada</p>
+                        <p className="mt-1 text-sm font-black text-slate-800">{matchedInvoice.invoiceNumber}</p>
+                        <p className="text-xs font-medium text-slate-500 truncate">{matchedInvoice.clientName}</p>
+                      </div>
+                      {onEditInvoice && (
+                        <button
+                          type="button"
+                          onClick={() => onEditInvoice(matchedInvoice)}
+                          title="Editar factura"
+                          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-emerald-100 text-emerald-600 transition-colors hover:border-emerald-200 hover:bg-emerald-50"
+                        >
+                          <Edit3 size={15} />
+                        </button>
+                      )}
+                    </div>
                   ) : (
                     <>
                       <p className="text-xs font-black text-amber-600 uppercase tracking-[0.18em]">Sin cruce</p>
