@@ -231,7 +231,12 @@ const dedupeBankTransactions = (transactions: BankTransaction[]) => {
 
 const buildPendingInvoiceContext = (invoices: Invoice[]) =>
   invoices
-    .filter((invoice) => invoice.status !== 'Pagada' && (Number(invoice.debtValue) || 0) > 0)
+    .filter((invoice) =>
+      invoice.status !== 'Pagada' &&
+      (Number(invoice.debtValue) || 0) > 0 &&
+      !invoice.paymentDate &&
+      (Number(invoice.paidAmount) || 0) <= 0
+    )
     .sort((a, b) => new Date(a.date || '1900-01-01').getTime() - new Date(b.date || '1900-01-01').getTime())
     .slice(0, 250)
     .map((invoice) => ({

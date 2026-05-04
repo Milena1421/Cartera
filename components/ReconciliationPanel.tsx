@@ -122,7 +122,13 @@ const amountsMatch = (transactionAmount: number, invoiceAmount: number) => {
   return Math.abs(tx - inv) <= 2;
 };
 
-const invoiceIsPending = (invoice: Invoice) => invoice.status !== 'Pagada' && (invoice.debtValue || 0) > 0;
+const invoiceHasRegisteredPayment = (invoice: Invoice) =>
+  Boolean(invoice.paymentDate) || (Number(invoice.paidAmount) || 0) > 0;
+
+const invoiceIsPending = (invoice: Invoice) =>
+  invoice.status !== 'Pagada' &&
+  (invoice.debtValue || 0) > 0 &&
+  !invoiceHasRegisteredPayment(invoice);
 
 const compareInvoicesByPaymentPriority = (a: Invoice, b: Invoice) => {
   const pendingDiff = Number(invoiceIsPending(b)) - Number(invoiceIsPending(a));
@@ -131,19 +137,20 @@ const compareInvoicesByPaymentPriority = (a: Invoice, b: Invoice) => {
 };
 
 const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[]) => {
+  const pendingInvoices = invoices.filter(invoiceIsPending);
   const refKey = normalizeInvoiceKey(transaction.reference);
   const descriptionKey = normalizeInvoiceKey(transaction.description);
   const documentCandidates = extractDocumentCandidates(`${transaction.reference || ''} ${transaction.description || ''}`);
 
   if (refKey) {
-    const matchedByReference = [...invoices]
+    const matchedByReference = [...pendingInvoices]
       .sort(compareInvoicesByPaymentPriority)
       .find((invoice) => normalizeInvoiceKey(invoice.invoiceNumber) === refKey);
     if (matchedByReference) return matchedByReference;
   }
 
   if (descriptionKey) {
-    const matchedByDescriptionInvoice = [...invoices]
+    const matchedByDescriptionInvoice = [...pendingInvoices]
       .sort(compareInvoicesByPaymentPriority)
       .find((invoice) =>
       descriptionKey.includes(normalizeInvoiceKey(invoice.invoiceNumber))
@@ -154,13 +161,12 @@ const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[
   const transactionAmount = Math.abs(Number(transaction.amount) || 0);
   const descriptionTokens = extractTokens(transaction.description);
 
-  const scoredCandidates = invoices
+  const scoredCandidates = pendingInvoices
     .map((invoice) => {
       const clientTokens = extractTokens(invoice.clientName);
       const sharedTokenCount = clientTokens.filter((token) => descriptionTokens.includes(token)).length;
       const amountMatchesTotal = amountsMatch(transactionAmount, invoice.total);
       const amountMatchesDebt = amountsMatch(transactionAmount, invoice.debtValue);
-      const amountMatchesPaid = amountsMatch(transactionAmount, invoice.paidAmount || 0);
       const amountMatchesCredit = amountsMatch(transactionAmount, invoice.creditAmount || 0);
       const documentMatches = documentCandidates.includes(normalizeDocumentNumber(invoice.documentNumber));
 
@@ -169,7 +175,6 @@ const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[
       if (sharedTokenCount > 0) score += sharedTokenCount * 20;
       if (amountMatchesDebt) score += 40;
       if (amountMatchesTotal) score += 30;
-      if (amountMatchesPaid) score += 18;
       if (amountMatchesCredit) score += 18;
       if (invoiceIsPending(invoice)) score += 10;
 
@@ -196,9 +201,7 @@ const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[
 
 const getInvoicePriorityList = (invoices: Invoice[]) => {
   const oldestFirst = sortInvoicesOldestFirst(invoices);
-  const pending = oldestFirst.filter((invoice) => invoice.status !== 'Pagada' && (invoice.debtValue || 0) > 0);
-  const others = oldestFirst.filter((invoice) => !pending.some((pendingInvoice) => pendingInvoice.id === invoice.id));
-  return [...pending, ...others];
+  return oldestFirst.filter(invoiceIsPending);
 };
 
 const resolveTransactionMatches = (transactions: BankTransaction[], invoices: Invoice[]): ReconciliationMatch[] => {
@@ -480,12 +483,12 @@ const ReconciliationPanel: React.FC<Props> = ({
 
       payableMatches.forEach(({ transaction, matchedInvoice }) => {
         if (!matchedInvoice) return;
+        if (!invoiceIsPending(matchedInvoice)) return;
 
         const paymentAmount = Math.abs(Number(transaction.amount) || 0);
         if (paymentAmount <= 0) return;
 
-        const currentPaidAmount = Number(matchedInvoice.paidAmount) || 0;
-        const paidAmount = Math.max(currentPaidAmount, paymentAmount);
+        const paidAmount = paymentAmount;
         const creditAmount = Number(matchedInvoice.creditAmount) || 0;
         const totalWithholdings =
           (Number(matchedInvoice.reteFuente) || 0) +
