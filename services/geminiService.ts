@@ -189,6 +189,46 @@ const isLikelyClientPayment = (transaction: BankTransaction) => {
   return !excludedConcepts.some((concept) => text.includes(concept));
 };
 
+const normalizePaymentText = (value?: string) =>
+  String(value || '')
+    .toUpperCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+const extractDocumentCandidates = (value?: string) => {
+  const matches = String(value || '').match(/\d[\d.\-\s]{5,}\d/g) || [];
+  return Array.from(
+    new Set(
+      matches
+        .map((match) => String(match || '').replace(/[^\d]/g, '').trim())
+        .filter((candidate) => candidate.length >= 7)
+    )
+  );
+};
+
+const getPaymentIdentityKey = (transaction: BankTransaction) => {
+  const amount = Math.round(Math.abs(Number(transaction.amount) || 0));
+  const date = String(transaction.date || '').trim();
+  const documentCandidate = extractDocumentCandidates(`${transaction.reference || ''} ${transaction.description || ''}`)[0] || '';
+  const description = normalizePaymentText(transaction.description).slice(0, 80);
+  const reference = normalizePaymentText(transaction.reference).slice(0, 80);
+  const partyKey = documentCandidate || `${description}|${reference}`;
+  return `${date}|${amount}|${partyKey}`;
+};
+
+const dedupeBankTransactions = (transactions: BankTransaction[]) => {
+  const seen = new Set<string>();
+  return transactions.filter((transaction) => {
+    const key = getPaymentIdentityKey(transaction);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const buildPendingInvoiceContext = (invoices: Invoice[]) =>
   invoices
     .filter((invoice) => invoice.status !== 'Pagada' && (Number(invoice.debtValue) || 0) > 0)
@@ -257,7 +297,7 @@ ${JSON.stringify(pendingInvoiceContext)}`)
     });
 
     const extracted: Array<Partial<BankTransaction>> = JSON.parse(response.text || "[]");
-    return extracted
+    return dedupeBankTransactions(extracted
       .map((item, index) => ({
         id: `bank-pdf-${Date.now()}-${index}`,
         date: String(item.date || '').trim(),
@@ -270,7 +310,7 @@ ${JSON.stringify(pendingInvoiceContext)}`)
         transaction.amount > 0 &&
         transaction.description !== 'Movimiento bancario' &&
         isLikelyClientPayment(transaction)
-      );
+      ));
   } catch (error) {
     console.error("Falla extrayendo extracto bancario PDF:", error);
     throw error;

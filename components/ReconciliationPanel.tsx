@@ -63,6 +63,26 @@ const extractDocumentCandidates = (value?: string) => {
   );
 };
 
+const getPaymentIdentityKey = (transaction: BankTransaction) => {
+  const amount = Math.round(Math.abs(Number(transaction.amount) || 0));
+  const date = String(transaction.date || '').trim();
+  const documentCandidate = extractDocumentCandidates(`${transaction.reference || ''} ${transaction.description || ''}`)[0] || '';
+  const description = normalizeText(transaction.description).slice(0, 80);
+  const reference = normalizeText(transaction.reference).slice(0, 80);
+  const partyKey = documentCandidate || `${description}|${reference}`;
+  return `${date}|${amount}|${partyKey}`;
+};
+
+const dedupeBankTransactions = (transactions: BankTransaction[]) => {
+  const seen = new Set<string>();
+  return transactions.filter((transaction) => {
+    const key = getPaymentIdentityKey(transaction);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const isLikelyClientPayment = (transaction: BankTransaction) => {
   const text = normalizeText(`${transaction.description || ''} ${transaction.reference || ''}`);
   const excludedConcepts = [
@@ -184,8 +204,16 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
   const matchesByTransactionId = new Map<string, Invoice | undefined>();
   const assignedInvoiceIds = new Set<string>();
   const unmatchedTransactions: BankTransaction[] = [];
+  const seenPaymentKeys = new Set<string>();
 
   for (const transaction of transactions) {
+    const paymentKey = getPaymentIdentityKey(transaction);
+    if (seenPaymentKeys.has(paymentKey)) {
+      matchesByTransactionId.set(transaction.id, undefined);
+      continue;
+    }
+    seenPaymentKeys.add(paymentKey);
+
     const directMatch = findDirectInvoiceMatch(transaction, invoices);
     if (directMatch) {
       matchesByTransactionId.set(transaction.id, directMatch);
@@ -209,18 +237,15 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     );
 
     const sortedTransactions = sortTransactionsOldestFirst(groupTransactions);
-    let candidateIndex = 0;
 
     sortedTransactions.forEach((transaction) => {
-      while (candidateIndex < relatedInvoices.length && assignedInvoiceIds.has(relatedInvoices[candidateIndex].id)) {
-        candidateIndex += 1;
-      }
-
-      const candidateInvoice = relatedInvoices[candidateIndex];
+      const candidateInvoice = relatedInvoices.find((invoice) =>
+        !assignedInvoiceIds.has(invoice.id) &&
+        (amountsMatch(transaction.amount, invoice.debtValue) || amountsMatch(transaction.amount, invoice.total))
+      );
       if (candidateInvoice) {
         matchesByTransactionId.set(transaction.id, candidateInvoice);
         assignedInvoiceIds.add(candidateInvoice.id);
-        candidateIndex += 1;
       }
     });
   });
@@ -393,7 +418,7 @@ const ReconciliationPanel: React.FC<Props> = ({
       return;
     }
 
-    const parsedTransactions: BankTransaction[] = lines.slice(1).map((line, index) => {
+    const parsedTransactions = dedupeBankTransactions(lines.slice(1).map((line, index) => {
       const cells = splitCsvLine(line, delimiter);
       return {
         id: `bank-${Date.now()}-${index}`,
@@ -407,7 +432,7 @@ const ReconciliationPanel: React.FC<Props> = ({
       transaction.amount > 0 &&
       (transaction.description || transaction.reference) &&
       isLikelyClientPayment(transaction)
-    );
+    ));
 
     if (parsedTransactions.length === 0) {
       setImportError('No encontre pagos de clientes con valor mayor a cero en el archivo.');
@@ -423,9 +448,16 @@ const ReconciliationPanel: React.FC<Props> = ({
 
   const applyMatches = async () => {
     const resolvedMatches = resolveTransactionMatches(filteredTransactions, invoices);
+    const usedPaymentKeys = new Set<string>();
+    const payableMatches = resolvedMatches.filter(({ transaction, matchedInvoice }) => {
+      if (!matchedInvoice) return false;
+      const paymentKey = getPaymentIdentityKey(transaction);
+      if (usedPaymentKeys.has(paymentKey)) return false;
+      usedPaymentKeys.add(paymentKey);
+      return true;
+    });
     const matchedTransactionIds = new Set(
-      resolvedMatches
-        .filter((item) => item.matchedInvoice)
+      payableMatches
         .map((item) => item.transaction.id)
     );
     const filteredTransactionIds = new Set(filteredTransactions.map((transaction) => transaction.id));
@@ -444,7 +476,7 @@ const ReconciliationPanel: React.FC<Props> = ({
     if (onApplyInvoicePayments) {
       const paidInvoicesById = new Map<string, Invoice>();
 
-      resolvedMatches.forEach(({ transaction, matchedInvoice }) => {
+      payableMatches.forEach(({ transaction, matchedInvoice }) => {
         if (!matchedInvoice) return;
 
         const paymentAmount = Math.abs(Number(transaction.amount) || 0);
