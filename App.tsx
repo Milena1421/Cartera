@@ -20,8 +20,8 @@ import ReportTable from './components/ReportTable';
 import ManualInvoiceModal from './components/ManualInvoiceModal';
 import ReconciliationPanel from './components/ReconciliationPanel';
 import PortfolioSummary from './components/PortfolioSummary';
-import { MOCK_BANK_TRANSACTIONS, MOCK_INVOICES } from './constants';
-import { Invoice, FinancialStats, AIAuditFinding } from './types';
+import { MOCK_INVOICES } from './constants';
+import { Invoice, FinancialStats, AIAuditFinding, BankTransaction } from './types';
 import { siigoService } from './services/siigoService';
 import { runAIAudit, parseCSVWithAI, auditSiigoMapping } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
@@ -30,6 +30,7 @@ import { formatDecimalValue } from './utils/formatters';
 
 const CURRENT_USER_STORAGE_KEY = 'cartera_current_user';
 const DELETED_INVOICES_STORAGE_KEY = 'cartera_deleted_invoice_numbers';
+const BANK_TRANSACTIONS_STORAGE_KEY = 'cartera_bank_transactions';
 
 type AppRole = 'admin' | 'accounting';
 
@@ -163,6 +164,35 @@ const setStoredDeletedInvoiceNumbers = (values: string[]) => {
   window.localStorage.setItem(DELETED_INVOICES_STORAGE_KEY, JSON.stringify(normalized));
 };
 
+const getBankTransactionsStorageKey = (username?: string) =>
+  `${BANK_TRANSACTIONS_STORAGE_KEY}_${username || 'default'}`;
+
+const getStoredBankTransactions = (username?: string): BankTransaction[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(getBankTransactionsStorageKey(username));
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((transaction) => ({
+        id: String(transaction?.id || `bank-${Date.now()}-${Math.random()}`),
+        date: String(transaction?.date || ''),
+        description: String(transaction?.description || ''),
+        amount: Number(transaction?.amount) || 0,
+        reference: transaction?.reference ? String(transaction.reference) : '',
+        isMatched: Boolean(transaction?.isMatched),
+      }))
+      .filter((transaction) => transaction.description || transaction.amount || transaction.reference);
+  } catch {
+    return [];
+  }
+};
+
+const setStoredBankTransactions = (username: string | undefined, transactions: BankTransaction[]) => {
+  if (typeof window === 'undefined') return;
+  window.localStorage.setItem(getBankTransactionsStorageKey(username), JSON.stringify(transactions));
+};
+
 const escapeCsvValue = (value: unknown) => {
   const text = String(value ?? '');
   if (/[;"\n\r]/.test(text)) {
@@ -183,7 +213,9 @@ const App: React.FC = () => {
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [activeView, setActiveView] = useState<'cartera' | 'conciliacion' | 'resumen'>('cartera');
   const [auditFindings] = useState<AIAuditFinding[]>([]);
-  const [bankTransactions, setBankTransactions] = useState(MOCK_BANK_TRANSACTIONS);
+  const [bankTransactions, setBankTransactions] = useState<BankTransaction[]>(() =>
+    getStoredBankTransactions(getStoredUser()?.username)
+  );
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
@@ -198,6 +230,11 @@ const App: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const canModifyInvoices = currentUser?.role === 'admin';
   const deletedInvoiceNumbersSet = useMemo(() => new Set(deletedInvoiceNumbers), [deletedInvoiceNumbers]);
+
+  const persistBankTransactions = useCallback((nextTransactions: BankTransaction[]) => {
+    setBankTransactions(nextTransactions);
+    setStoredBankTransactions(currentUser?.username, nextTransactions);
+  }, [currentUser?.username]);
 
   const requireAdminAccess = () => {
     if (canModifyInvoices) return true;
@@ -241,6 +278,7 @@ const App: React.FC = () => {
 
     window.localStorage.setItem(CURRENT_USER_STORAGE_KEY, user.username);
     setCurrentUser(user);
+    setBankTransactions(getStoredBankTransactions(user.username));
     setLoginPassword('');
     setLoginError(null);
     setErrorMessage(null);
@@ -250,6 +288,7 @@ const App: React.FC = () => {
     window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
     setCurrentUser(null);
     setInvoices([]);
+    setBankTransactions([]);
     setSearchTerm('');
     setSelectedMonth('all');
     setSelectedClient('all');
@@ -900,7 +939,7 @@ const App: React.FC = () => {
               <ReconciliationPanel
                 invoices={invoices}
                 transactions={bankTransactions}
-                onTransactionsChange={setBankTransactions}
+                onTransactionsChange={persistBankTransactions}
                 selectedMonth={selectedMonth}
                 onApplyInvoicePayments={handleReconciliationPayments}
               />
