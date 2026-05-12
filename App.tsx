@@ -27,6 +27,7 @@ import { runAIAudit, parseCSVWithAI, auditSiigoMapping } from './services/gemini
 import { supabaseService } from './services/supabaseService';
 import { parseCarteraCsv } from './services/csvImportService';
 import { formatDecimalValue } from './utils/formatters';
+import { getInvoiceFaceValue } from './utils/invoiceAmounts';
 
 const CURRENT_USER_STORAGE_KEY = 'cartera_current_user';
 const DELETED_INVOICES_STORAGE_KEY = 'cartera_deleted_invoice_numbers';
@@ -811,7 +812,7 @@ const App: React.FC = () => {
       currentGroup.invoices.push(invoice);
       currentGroup.totalSubtotal += Number(invoice.subtotal || 0);
       currentGroup.totalIva += Number(invoice.iva || 0);
-      currentGroup.totalAmount += Number(invoice.total || 0);
+      currentGroup.totalAmount += getInvoiceFaceValue(invoice);
       currentGroup.totalDebt += Number(invoice.debtValue || 0);
       acc[clientName] = currentGroup;
       return acc;

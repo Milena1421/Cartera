@@ -2,6 +2,7 @@ import React from 'react';
 import { FileText, Receipt, UserRound } from 'lucide-react';
 import { Invoice } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import { getInvoiceFaceValue } from '../utils/invoiceAmounts';
 
 type ClientSummary = {
   clientName: string;
@@ -140,7 +141,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                     <td className="px-6 py-5 text-sm font-bold text-slate-700">{formatDate(invoice.date)}</td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.subtotal)}</td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.iva)}</td>
-                    <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(invoice.total)}</td>
+                    <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(getInvoiceFaceValue(invoice))}</td>
                   </tr>
                 ))}
               </tbody>
