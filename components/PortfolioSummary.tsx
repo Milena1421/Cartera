@@ -96,8 +96,8 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                   <p className="mt-2 text-xl font-black text-slate-900">{group.invoices.length}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Total Deuda</p>
-                  <p className="mt-2 text-xl font-black text-red-600">{formatCurrency(group.totalDebt || group.totalAmount)}</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Valor Factura</p>
+                  <p className="mt-2 text-xl font-black text-red-600">{formatCurrency(group.totalAmount)}</p>
                 </div>
               </div>
             </div>
