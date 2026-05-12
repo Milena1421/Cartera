@@ -73,7 +73,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
         </article>
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Valor Factura</p>
-          <p className="mt-3 text-[30px] leading-none font-black text-red-600">{formatCurrency(totalDebt || totalAmount)}</p>
+          <p className="mt-3 text-[30px] leading-none font-black text-red-600">{formatCurrency(totalAmount)}</p>
         </article>
       </section>
 
@@ -140,7 +140,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                     <td className="px-6 py-5 text-sm font-bold text-slate-700">{formatDate(invoice.date)}</td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.subtotal)}</td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.iva)}</td>
-                    <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(invoice.debtValue || invoice.total)}</td>
+                    <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(invoice.total)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -151,7 +151,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                   </td>
                   <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(group.totalSubtotal)}</td>
                   <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(group.totalIva)}</td>
-                  <td className="px-6 py-4 text-right text-sm font-black text-slate-900">{formatCurrency(group.totalDebt || group.totalAmount)}</td>
+                  <td className="px-6 py-4 text-right text-sm font-black text-slate-900">{formatCurrency(group.totalAmount)}</td>
                 </tr>
               </tfoot>
             </table>
