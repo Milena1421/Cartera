@@ -13,7 +13,7 @@ interface Props {
   invoices: Invoice[];
   transactions: BankTransaction[];
   onTransactionsChange: (transactions: BankTransaction[]) => void;
-  selectedMonth?: string;
+  selectedPeriods?: string[];
   onApplyInvoicePayments?: (invoices: Invoice[]) => Promise<void> | void;
   onEditInvoice?: (invoice: Invoice) => void;
 }
@@ -324,26 +324,29 @@ const detectDelimiter = (header: string) => {
   return ',';
 };
 
-const getMonthFromDate = (value?: string) => {
+const getPeriodFromDate = (value?: string) => {
   const trimmed = String(value || '').trim();
   if (!trimmed) return '';
 
   const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
-  if (isoMatch) return isoMatch[2].padStart(2, '0');
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}`;
 
   const localMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
-  if (localMatch) return localMatch[2].padStart(2, '0');
+  if (localMatch) {
+    const year = localMatch[3].length === 2 ? `20${localMatch[3]}` : localMatch[3];
+    return `${year}-${localMatch[2].padStart(2, '0')}`;
+  }
 
   const parsedDate = new Date(trimmed);
   if (Number.isNaN(parsedDate.getTime())) return '';
-  return String(parsedDate.getMonth() + 1).padStart(2, '0');
+  return `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}`;
 };
 
 const ReconciliationPanel: React.FC<Props> = ({
   invoices,
   transactions,
   onTransactionsChange,
-  selectedMonth = 'all',
+  selectedPeriods = [],
   onApplyInvoicePayments,
   onEditInvoice,
 }) => {
@@ -360,9 +363,9 @@ const ReconciliationPanel: React.FC<Props> = ({
   });
 
   const filteredTransactions = useMemo(() => {
-    if (selectedMonth === 'all') return transactions;
-    return transactions.filter((transaction) => getMonthFromDate(transaction.date) === selectedMonth);
-  }, [selectedMonth, transactions]);
+    if (selectedPeriods.length === 0) return transactions;
+    return transactions.filter((transaction) => selectedPeriods.includes(getPeriodFromDate(transaction.date)));
+  }, [selectedPeriods, transactions]);
 
   const matches = useMemo<ReconciliationMatch[]>(() => {
     return resolveTransactionMatches(filteredTransactions, invoices);
@@ -600,9 +603,9 @@ const ReconciliationPanel: React.FC<Props> = ({
         <div className="px-6 py-4 border-b border-slate-100 flex items-center gap-3">
           <Landmark size={18} className="text-blue-500" />
           <h2 className="text-sm font-black uppercase tracking-[0.22em] text-slate-700">Conciliacion bancaria</h2>
-          {selectedMonth !== 'all' && (
+          {selectedPeriods.length > 0 && (
             <span className="ml-auto rounded-full bg-blue-50 px-3 py-1 text-[10px] font-black uppercase tracking-[0.18em] text-blue-600">
-              Mes filtrado
+              Periodos filtrados
             </span>
           )}
         </div>

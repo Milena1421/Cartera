@@ -144,6 +144,44 @@ const getClientDisplayName = (invoice: Invoice) => {
   return clientName;
 };
 
+const MONTH_LABELS: Record<string, string> = {
+  '01': 'Enero',
+  '02': 'Febrero',
+  '03': 'Marzo',
+  '04': 'Abril',
+  '05': 'Mayo',
+  '06': 'Junio',
+  '07': 'Julio',
+  '08': 'Agosto',
+  '09': 'Septiembre',
+  '10': 'Octubre',
+  '11': 'Noviembre',
+  '12': 'Diciembre',
+};
+
+const getPeriodFromDate = (value?: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return '';
+
+  const isoMatch = trimmed.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (isoMatch) return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}`;
+
+  const localMatch = trimmed.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{2,4})/);
+  if (localMatch) {
+    const year = localMatch[3].length === 2 ? `20${localMatch[3]}` : localMatch[3];
+    return `${year}-${localMatch[2].padStart(2, '0')}`;
+  }
+
+  const parsedDate = new Date(trimmed);
+  if (Number.isNaN(parsedDate.getTime())) return '';
+  return `${parsedDate.getFullYear()}-${String(parsedDate.getMonth() + 1).padStart(2, '0')}`;
+};
+
+const formatPeriodLabel = (period: string) => {
+  const [year, month] = period.split('-');
+  return `${MONTH_LABELS[month] || month} ${year}`;
+};
+
 
 const getStoredDeletedInvoiceNumbers = () => {
   if (typeof window === 'undefined') return [];
@@ -254,7 +292,8 @@ const App: React.FC = () => {
   const [isSyncing, setIsSyncing] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState<string>('all');
+  const [selectedPeriods, setSelectedPeriods] = useState<string[]>([]);
+  const [isPeriodFilterOpen, setIsPeriodFilterOpen] = useState(false);
   const [selectedClient, setSelectedClient] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [activeView, setActiveView] = useState<'cartera' | 'conciliacion' | 'resumen'>('cartera');
@@ -344,7 +383,8 @@ const App: React.FC = () => {
     setInvoices([]);
     setBankTransactions([]);
     setSearchTerm('');
-    setSelectedMonth('all');
+    setSelectedPeriods([]);
+    setIsPeriodFilterOpen(false);
     setSelectedClient('all');
     setSelectedStatus('all');
     setActiveView('cartera');
@@ -352,21 +392,28 @@ const App: React.FC = () => {
     setIsManualModalOpen(false);
   };
 
-  const months = [
-    { value: 'all', label: 'Todos los meses' },
-    { value: '01', label: 'Enero' },
-    { value: '02', label: 'Febrero' },
-    { value: '03', label: 'Marzo' },
-    { value: '04', label: 'Abril' },
-    { value: '05', label: 'Mayo' },
-    { value: '06', label: 'Junio' },
-    { value: '07', label: 'Julio' },
-    { value: '08', label: 'Agosto' },
-    { value: '09', label: 'Septiembre' },
-    { value: '10', label: 'Octubre' },
-    { value: '11', label: 'Noviembre' },
-    { value: '12', label: 'Diciembre' },
-  ];
+  const periodOptions = useMemo(() => {
+    const periods = invoices
+      .map((invoice) => getPeriodFromDate(invoice.date))
+      .filter((period): period is string => Boolean(period));
+    return Array.from(new Set<string>(periods))
+      .sort((a, b) => b.localeCompare(a))
+      .map((period) => ({ value: period, label: formatPeriodLabel(period) }));
+  }, [invoices]);
+
+  const selectedPeriodLabel = selectedPeriods.length === 0
+    ? 'Todos los periodos'
+    : selectedPeriods.length === 1
+      ? formatPeriodLabel(selectedPeriods[0])
+      : `${selectedPeriods.length} periodos`;
+
+  const toggleSelectedPeriod = (period: string) => {
+    setSelectedPeriods((current) =>
+      current.includes(period)
+        ? current.filter((item) => item !== period)
+        : [...current, period].sort((a, b) => b.localeCompare(a))
+    );
+  };
 
   const statuses = [
     { value: 'all', label: 'Todos los estados' },
@@ -761,15 +808,16 @@ const App: React.FC = () => {
         const matchesSearch =
           (inv.clientName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
           (inv.invoiceNumber?.toLowerCase() || '').includes(searchTerm.toLowerCase());
-        const matchesMonth = selectedMonth === 'all' || (inv.date && inv.date.split('-')[1] === selectedMonth);
+        const invoicePeriod = getPeriodFromDate(inv.date);
+        const matchesPeriod = selectedPeriods.length === 0 || selectedPeriods.includes(invoicePeriod);
         const matchesClient = selectedClient === 'all' || inv.clientName === selectedClient;
         const matchesStatus =
           selectedStatus === 'all' ||
           normalizeStatusKey(inv.status) === normalizeStatusKey(selectedStatus);
-        return matchesSearch && matchesMonth && matchesClient && matchesStatus;
+        return matchesSearch && matchesPeriod && matchesClient && matchesStatus;
       })
       .sort((a, b) => new Date(b.date || '1900-01-01').getTime() - new Date(a.date || '1900-01-01').getTime());
-  }, [invoices, searchTerm, selectedMonth, selectedClient, selectedStatus]);
+  }, [invoices, searchTerm, selectedPeriods, selectedClient, selectedStatus]);
 
   const stats: FinancialStats = useMemo(() => {
     const totalInvoices = filteredInvoices.length;
@@ -965,11 +1013,72 @@ const App: React.FC = () => {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-3">
-            <div className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2">
-              <Calendar size={12} className="text-slate-400" />
-              <select className="bg-transparent border-none outline-none text-[10px] font-black text-slate-500 uppercase" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
-                {months.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
-              </select>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setIsPeriodFilterOpen((current) => !current)}
+                className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2 min-w-[210px] justify-between"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Calendar size={12} className="text-slate-400 shrink-0" />
+                  <span className="truncate text-[10px] font-black text-slate-500 uppercase">{selectedPeriodLabel}</span>
+                </span>
+                {selectedPeriods.length > 0 && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedPeriods([]);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSelectedPeriods([]);
+                      }
+                    }}
+                    className="rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                    aria-label="Limpiar periodos"
+                  >
+                    <X size={12} />
+                  </span>
+                )}
+              </button>
+              {isPeriodFilterOpen && (
+                <div className="absolute left-0 top-[calc(100%+0.5rem)] z-30 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-200/70">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Periodos</p>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPeriods([])}
+                      className="text-[10px] font-black uppercase tracking-widest text-blue-600"
+                    >
+                      Todos
+                    </button>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto p-2 custom-scrollbar">
+                    {periodOptions.length === 0 ? (
+                      <p className="px-3 py-4 text-sm font-bold text-slate-400">Sin periodos disponibles</p>
+                    ) : (
+                      periodOptions.map((period) => (
+                        <label
+                          key={period.value}
+                          className="flex cursor-pointer items-center gap-3 rounded-lg px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                        >
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4 rounded border-slate-300 text-blue-600"
+                            checked={selectedPeriods.includes(period.value)}
+                            onChange={() => toggleSelectedPeriod(period.value)}
+                          />
+                          <span>{period.label}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2">
               <UserIcon size={12} className="text-slate-400" />
@@ -1021,7 +1130,7 @@ const App: React.FC = () => {
                 invoices={invoices}
                 transactions={bankTransactions}
                 onTransactionsChange={persistBankTransactions}
-                selectedMonth={selectedMonth}
+                selectedPeriods={selectedPeriods}
                 onApplyInvoicePayments={handleReconciliationPayments}
                 onEditInvoice={(invoice) => {
                   setSelectedInvoiceId(invoice.id);
