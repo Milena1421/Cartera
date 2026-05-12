@@ -44,6 +44,8 @@ export interface BankTransaction {
 export interface FinancialStats {
   totalInvoices: number;
   totalInvoiced: number;
+  totalIva: number;
+  totalReteIva: number;
   totalCollected: number;
   totalPending: number;
   totalOverdue: number;

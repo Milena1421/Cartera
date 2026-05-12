@@ -774,6 +774,8 @@ const App: React.FC = () => {
   const stats: FinancialStats = useMemo(() => {
     const totalInvoices = filteredInvoices.length;
     const totalInvoiced = filteredInvoices.reduce((acc, inv) => acc + (inv.total || 0), 0);
+    const totalIva = filteredInvoices.reduce((acc, inv) => acc + Number(inv.iva || 0), 0);
+    const totalReteIva = filteredInvoices.reduce((acc, inv) => acc + Number(inv.reteIva || 0), 0);
     const totalCollected = filteredInvoices.reduce((acc, inv) => {
       const recaudo = inv.status === 'Pagada' ? ((inv.paidAmount || inv.total) || 0) : (inv.paidAmount || 0);
       const abono = inv.creditAmount || 0;
@@ -781,7 +783,7 @@ const App: React.FC = () => {
     }, 0);
     const totalPending = filteredInvoices.reduce((acc, inv) => acc + (inv.debtValue || 0), 0);
     const totalOverdue = filteredInvoices.filter((i) => i.moraDays && i.moraDays > 0).reduce((acc, inv) => acc + (inv.debtValue || 0), 0);
-    return { totalInvoices, totalInvoiced, totalCollected, totalPending, totalOverdue, averageMoraDays: 0 };
+    return { totalInvoices, totalInvoiced, totalIva, totalReteIva, totalCollected, totalPending, totalOverdue, averageMoraDays: 0 };
   }, [filteredInvoices]);
 
   const portfolioSummaryGroups = useMemo(() => {

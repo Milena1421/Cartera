@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { FinancialStats } from '../types';
-import { TrendingUp, TrendingDown, Clock, DollarSign, FileText } from 'lucide-react';
+import { TrendingUp, TrendingDown, Clock, DollarSign, FileText, Percent, ReceiptText } from 'lucide-react';
 import { formatCurrency, formatNumber } from '../utils/formatters';
 
 interface Props {
@@ -22,6 +22,20 @@ const DashboardStats: React.FC<Props> = ({ stats }) => {
       value: stats.totalInvoiced, 
       icon: <DollarSign className="w-5 h-5 text-blue-600" />,
       bg: 'bg-blue-50',
+      format: 'currency'
+    },
+    {
+      label: 'IVA Facturado',
+      value: stats.totalIva,
+      icon: <ReceiptText className="w-5 h-5 text-indigo-600" />,
+      bg: 'bg-indigo-50',
+      format: 'currency'
+    },
+    {
+      label: 'ReteIVA',
+      value: stats.totalReteIva,
+      icon: <Percent className="w-5 h-5 text-violet-600" />,
+      bg: 'bg-violet-50',
       format: 'currency'
     },
     { 
@@ -48,15 +62,15 @@ const DashboardStats: React.FC<Props> = ({ stats }) => {
   ];
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-6 mb-8">
+    <div className="grid grid-cols-[repeat(auto-fit,minmax(240px,1fr))] gap-6 mb-8">
       {cards.map((card, i) => (
-        <div key={i} className="bg-white p-7 rounded-[1.25rem] border border-slate-100 shadow-sm shadow-slate-200/40 flex items-center gap-5 hover:shadow-md transition-shadow">
+        <div key={i} className="bg-white p-6 rounded-[1.25rem] border border-slate-100 shadow-sm shadow-slate-200/40 flex items-center gap-5 hover:shadow-md transition-shadow">
           <div className={`${card.bg} p-4 rounded-2xl`}>
             {card.icon}
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-1">{card.label}</p>
-            <p className="text-2xl font-black text-slate-800 tracking-tight">
+            <p className="text-2xl font-black text-slate-800 tracking-tight whitespace-nowrap">
               {card.format === 'number' ? formatNumber(card.value) : formatCurrency(card.value)}
             </p>
           </div>
