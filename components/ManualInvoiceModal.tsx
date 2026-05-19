@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Save, FileText, User, Calendar, DollarSign, AlignLeft, PieChart, Landmark } from 'lucide-react';
 import { Invoice, PaymentStatus } from '../types';
 import { formatDecimalValue } from '../utils/formatters';
+import { getInvoiceFaceValue } from '../utils/invoiceAmounts';
 
 interface Props {
   isOpen: boolean;
@@ -147,7 +148,11 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     if (isSaving) return;
     const subtotalNum = parseNumericInput(formData.subtotal);
     const ivaNum = parseNumericInput(formData.iva);
-    const totalNum = formData.total.trim() === '' ? (subtotalNum + ivaNum) : parseNumericInput(formData.total);
+    const totalNum = getInvoiceFaceValue({
+      subtotal: subtotalNum,
+      iva: ivaNum,
+      total: formData.total.trim() === '' ? (subtotalNum + ivaNum) : parseNumericInput(formData.total),
+    });
     const paidNum = parseNumericInput(formData.paidAmount);
     const creditNum = parseNumericInput(formData.creditAmount);
     const rf = parseNumericInput(formData.reteFuente);

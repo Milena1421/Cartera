@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { Upload, CheckCircle2, AlertCircle, Landmark, Edit3, Save, X } from 'lucide-react';
 import { BankTransaction, Invoice } from '../types';
 import { formatCurrency } from '../utils/formatters';
+import { getInvoiceFaceValue } from '../utils/invoiceAmounts';
 import { parseBankStatementPdfWithAI } from '../services/geminiService';
 
 interface ReconciliationMatch {
@@ -130,7 +131,7 @@ const calculateRemainingDebt = (invoice: Invoice, paidAmount: number) => {
     (Number(invoice.reteIva) || 0) +
     (Number(invoice.reteIca) || 0);
   const creditAmount = Number(invoice.creditAmount) || 0;
-  return Math.max(0, roundCurrency((Number(invoice.total) || 0) - paidAmount - creditAmount - totalWithholdings));
+  return Math.max(0, roundCurrency(getInvoiceFaceValue(invoice) - paidAmount - creditAmount - totalWithholdings));
 };
 
 const invoiceHasRegisteredPayment = (invoice: Invoice) =>
@@ -176,7 +177,7 @@ const findDirectInvoiceMatch = (transaction: BankTransaction, invoices: Invoice[
     .map((invoice) => {
       const clientTokens = extractTokens(invoice.clientName);
       const sharedTokenCount = clientTokens.filter((token) => descriptionTokens.includes(token)).length;
-      const amountMatchesTotal = amountsMatch(transactionAmount, invoice.total);
+      const amountMatchesTotal = amountsMatch(transactionAmount, getInvoiceFaceValue(invoice));
       const amountMatchesDebt = amountsMatch(transactionAmount, invoice.debtValue);
       const amountMatchesCredit = amountsMatch(transactionAmount, invoice.creditAmount || 0);
       const documentMatches = documentCandidates.includes(normalizeDocumentNumber(invoice.documentNumber));
@@ -256,7 +257,7 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     sortedTransactions.forEach((transaction) => {
       const candidateInvoice = relatedInvoices.find((invoice) =>
         !assignedInvoiceIds.has(invoice.id) &&
-        (amountsMatch(transaction.amount, invoice.debtValue) || amountsMatch(transaction.amount, invoice.total))
+        (amountsMatch(transaction.amount, invoice.debtValue) || amountsMatch(transaction.amount, getInvoiceFaceValue(invoice)))
       );
       if (candidateInvoice) {
         matchesByTransactionId.set(transaction.id, candidateInvoice);

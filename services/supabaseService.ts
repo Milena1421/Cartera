@@ -1,6 +1,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { BankTransaction, Invoice } from '../types';
+import { getInvoiceFaceValue } from '../utils/invoiceAmounts';
 
 const SUPABASE_URL = 'https://xfsbogjozqvaphoapqnz.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_PL1m0jMzLteH19aQWAY2oA_pb6-FMIe';
@@ -66,7 +67,11 @@ export const supabaseService = {
 
   calculateDebt(invoice: Partial<Invoice>) {
     if (this.isNoteCreditStatus(invoice.status)) return 0;
-    const total = Number(invoice.total) || 0;
+    const total = getInvoiceFaceValue({
+      subtotal: Number(invoice.subtotal) || 0,
+      iva: Number(invoice.iva) || 0,
+      total: Number(invoice.total) || 0,
+    });
     const deductions =
       (Number(invoice.paidAmount) || 0) +
       (Number(invoice.creditAmount) || 0) +
@@ -288,9 +293,14 @@ export const supabaseService = {
         Number(preferred.paidWithWithholdings) || 0,
         Number(fallback.paidWithWithholdings) || 0
       );
+    const mergedFaceValue = getInvoiceFaceValue({
+      subtotal: mergedSubtotal,
+      iva: mergedIva,
+      total: mergedTotal,
+    });
     const mergedExpectedDebt = Math.max(
       0,
-      mergedTotal - mergedPaidAmount - mergedCreditAmount - mergedReteFuente - mergedReteIva - mergedReteIca
+      mergedFaceValue - mergedPaidAmount - mergedCreditAmount - mergedReteFuente - mergedReteIva - mergedReteIca
     );
     const preferredDebt = Number(preferred.debtValue) || 0;
     const fallbackDebt = Number(fallback.debtValue) || 0;
@@ -320,7 +330,7 @@ export const supabaseService = {
       dueDate: pickText(preferred.dueDate, fallback.dueDate, this.hasMeaningfulDate.bind(this)),
       subtotal: mergedSubtotal,
       iva: mergedIva,
-      total: mergedTotal,
+      total: mergedFaceValue,
       discounts: mergedDiscounts,
       reteFuente: mergedReteFuente,
       reteIva: mergedReteIva,
@@ -552,6 +562,7 @@ export const supabaseService = {
 
       // Mapeo limpio de datos
       const dataToSync = finalInvoices.map(inv => {
+        const total = getInvoiceFaceValue(inv);
         const debtValue = this.calculateDebt(inv);
         const status = this.resolveStatusFromDebt(inv.status, debtValue);
         const payload: any = {
@@ -565,7 +576,7 @@ export const supabaseService = {
           dueDate: inv.dueDate || '',
           subtotal: Number(inv.subtotal) || 0,
           iva: Number(inv.iva) || 0,
-          total: Number(inv.total) || 0,
+          total,
           discounts: Number(inv.discounts) || 0,
           reteFuente: Number(inv.reteFuente) || 0,
           reteIva: Number(inv.reteIva) || 0,
@@ -712,6 +723,8 @@ export const supabaseService = {
         if ((normalizedInvoice.total || 0) > 0 && (normalizedInvoice.subtotal || 0) <= 0) {
           normalizedInvoice.subtotal = Math.max(0, (normalizedInvoice.total || 0) - (normalizedInvoice.iva || 0));
         }
+
+        normalizedInvoice.total = getInvoiceFaceValue(normalizedInvoice);
 
         normalizedInvoice.observations = this.sanitizeObservation(
           this.getFirstDefined(row, ['observations', 'observation', 'observacion', 'observaciones']) as string,
