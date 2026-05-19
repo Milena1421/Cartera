@@ -143,6 +143,17 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     return clean;
   };
 
+  const updateBaseAmount = (field: 'subtotal' | 'iva', value: string) => {
+    const nextFormData = { ...formData, [field]: value };
+    const subtotalNum = parseNumericInput(nextFormData.subtotal);
+    const ivaNum = parseNumericInput(nextFormData.iva);
+
+    setFormData({
+      ...nextFormData,
+      total: formatDecimalValue(roundCurrency(subtotalNum + ivaNum)),
+    });
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
@@ -281,13 +292,13 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   <DollarSign size={12} className="text-blue-500" /> Subtotal
                 </label>
-                <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3.5 text-sm font-bold outline-none" value={formData.subtotal} onChange={e => setFormData({ ...formData, subtotal: e.target.value })} />
+                <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3.5 text-sm font-bold outline-none" value={formData.subtotal} onChange={e => updateBaseAmount('subtotal', e.target.value)} />
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
                   <DollarSign size={12} className="text-blue-500" /> IVA
                 </label>
-                <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3.5 text-sm font-bold outline-none" value={formData.iva} onChange={e => setFormData({ ...formData, iva: e.target.value })} />
+                <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-5 py-3.5 text-sm font-bold outline-none" value={formData.iva} onChange={e => updateBaseAmount('iva', e.target.value)} />
               </div>
               <div className="space-y-2">
                 <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
