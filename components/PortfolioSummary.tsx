@@ -42,12 +42,49 @@ const formatDate = (value?: string) => {
   return `${day}/${month}/${year}`;
 };
 
+const parseInvoiceDate = (value?: string) => {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoMatch) {
+    const [, year, month, day] = isoMatch;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+
+  const localMatch = trimmed.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (localMatch) {
+    const [, day, month, year] = localMatch;
+    return new Date(Number(year), Number(month) - 1, Number(day));
+  }
+
+  const normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
+  const parsed = new Date(normalized);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+};
+
+const getInvoiceMoraDaysFromInvoiceDate = (invoice: Invoice) => {
+  const invoiceDate = parseInvoiceDate(invoice.date);
+  if (!invoiceDate) return 0;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  invoiceDate.setHours(0, 0, 0, 0);
+
+  const diffDays = Math.floor((today.getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24));
+  return diffDays > 0 ? diffDays : 0;
+};
+
 const PortfolioSummary: React.FC<Props> = ({ groups }) => {
   const totalInvoices = groups.reduce((acc, group) => acc + group.invoices.length, 0);
   const totalSubtotal = groups.reduce((acc, group) => acc + group.totalSubtotal, 0);
   const totalIva = groups.reduce((acc, group) => acc + group.totalIva, 0);
   const totalAmount = groups.reduce((acc, group) => acc + group.totalAmount, 0);
   const totalDebt = groups.reduce((acc, group) => acc + group.totalDebt, 0);
+  const maxMoraDays = groups.reduce(
+    (maxDays, group) => Math.max(maxDays, ...group.invoices.map(getInvoiceMoraDaysFromInvoiceDate)),
+    0
+  );
 
   if (groups.length === 0) {
     return (
@@ -59,7 +96,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
 
   return (
     <div className="space-y-6">
-      <section className="grid grid-cols-1 gap-4 md:grid-cols-4">
+      <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Clientes</p>
           <p className="mt-3 text-[30px] leading-none font-black text-slate-900">{groups.length}</p>
@@ -76,9 +113,16 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
           <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Valor Factura</p>
           <p className="mt-3 text-[30px] leading-none font-black text-red-600">{formatCurrency(totalAmount)}</p>
         </article>
+        <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Mayor Mora</p>
+          <p className="mt-3 text-[30px] leading-none font-black text-amber-600">{maxMoraDays} d</p>
+        </article>
       </section>
 
-      {groups.map((group) => (
+      {groups.map((group) => {
+        const groupMaxMoraDays = Math.max(...group.invoices.map(getInvoiceMoraDaysFromInvoiceDate), 0);
+
+        return (
         <section key={group.clientName} className="overflow-hidden rounded-[1.6rem] border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 bg-slate-50 px-6 py-5">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
@@ -97,6 +141,10 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                   <p className="mt-2 text-xl font-black text-slate-900">{group.invoices.length}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Mayor Mora</p>
+                  <p className="mt-2 text-xl font-black text-amber-600">{groupMaxMoraDays} d</p>
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Valor Factura</p>
                   <p className="mt-2 text-xl font-black text-red-600">{formatCurrency(group.totalAmount)}</p>
                 </div>
@@ -111,13 +159,17 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Factura</th>
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Descripción</th>
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Fecha Factura</th>
+                  <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Dias Mora</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Subtotal</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">IVA</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Valor Factura</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
-                {group.invoices.map((invoice) => (
+                {group.invoices.map((invoice) => {
+                  const invoiceMoraDays = getInvoiceMoraDaysFromInvoiceDate(invoice);
+
+                  return (
                   <tr key={invoice.id} className="align-top">
                     <td className="px-6 py-5">
                       <div className="flex items-start gap-3">
@@ -139,15 +191,19 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                       </div>
                     </td>
                     <td className="px-6 py-5 text-sm font-bold text-slate-700">{formatDate(invoice.date)}</td>
+                    <td className={`px-6 py-5 text-right text-sm font-black ${invoiceMoraDays > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
+                      {invoiceMoraDays} d
+                    </td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.subtotal)}</td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.iva)}</td>
                     <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(getInvoiceFaceValue(invoice))}</td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
               <tfoot className="bg-slate-50">
                 <tr>
-                  <td className="px-6 py-4 text-sm font-black text-slate-500 uppercase" colSpan={3}>
+                  <td className="px-6 py-4 text-sm font-black text-slate-500 uppercase" colSpan={4}>
                     Recuento {group.invoices.length}
                   </td>
                   <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(group.totalSubtotal)}</td>
@@ -158,7 +214,8 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
             </table>
           </div>
         </section>
-      ))}
+        );
+      })}
 
       <section className="rounded-[1.6rem] border border-slate-200 bg-slate-900 px-6 py-5 text-white shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -168,6 +225,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
           </div>
           <div className="flex flex-wrap gap-6 text-sm font-bold text-slate-200">
             <span>Facturas: {totalInvoices}</span>
+            <span>Mayor mora: {maxMoraDays} d</span>
             <span>Subtotal: {formatCurrency(totalSubtotal)}</span>
             <span>IVA: {formatCurrency(totalIva)}</span>
           </div>
