@@ -294,7 +294,8 @@ const App: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedPeriods, setSelectedPeriods] = useState<string[]>([]);
   const [isPeriodFilterOpen, setIsPeriodFilterOpen] = useState(false);
-  const [selectedClient, setSelectedClient] = useState<string>('all');
+  const [selectedClients, setSelectedClients] = useState<string[]>([]);
+  const [isClientFilterOpen, setIsClientFilterOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [activeView, setActiveView] = useState<'cartera' | 'conciliacion' | 'resumen'>('cartera');
   const [auditFindings] = useState<AIAuditFinding[]>([]);
@@ -385,7 +386,8 @@ const App: React.FC = () => {
     setSearchTerm('');
     setSelectedPeriods([]);
     setIsPeriodFilterOpen(false);
-    setSelectedClient('all');
+    setSelectedClients([]);
+    setIsClientFilterOpen(false);
     setSelectedStatus('all');
     setActiveView('cartera');
     setEditingInvoice(null);
@@ -415,6 +417,14 @@ const App: React.FC = () => {
     );
   };
 
+  const toggleSelectedClient = (client: string) => {
+    setSelectedClients((current) =>
+      current.includes(client)
+        ? current.filter((item) => item !== client)
+        : [...current, client].sort((a, b) => a.localeCompare(b, 'es-CO'))
+    );
+  };
+
   const statuses = [
     { value: 'all', label: 'Todos los estados' },
     { value: 'Pendiente por pagar', label: 'Pendiente' },
@@ -422,10 +432,18 @@ const App: React.FC = () => {
     { value: NOTE_CREDIT_STATUS, label: NOTE_CREDIT_STATUS },
   ];
 
-  const uniqueClients = useMemo(() => {
-    const clients = invoices.map((inv) => inv.clientName).filter(Boolean);
-    return ['all', ...Array.from(new Set(clients))].sort();
+  const uniqueClients = useMemo<string[]>(() => {
+    const clients = invoices
+      .map((inv) => inv.clientName)
+      .filter((client): client is string => Boolean(client));
+    return Array.from(new Set<string>(clients)).sort((a, b) => a.localeCompare(b, 'es-CO'));
   }, [invoices]);
+
+  const selectedClientLabel = selectedClients.length === 0
+    ? 'Todos los clientes'
+    : selectedClients.length === 1
+      ? selectedClients[0]
+      : `${selectedClients.length} clientes`;
 
   const loadInitialData = useCallback(async () => {
     if (!currentUser) {
@@ -810,14 +828,14 @@ const App: React.FC = () => {
           (inv.invoiceNumber?.toLowerCase() || '').includes(searchTerm.toLowerCase());
         const invoicePeriod = getPeriodFromDate(inv.date);
         const matchesPeriod = selectedPeriods.length === 0 || selectedPeriods.includes(invoicePeriod);
-        const matchesClient = selectedClient === 'all' || inv.clientName === selectedClient;
+        const matchesClient = selectedClients.length === 0 || selectedClients.includes(inv.clientName);
         const matchesStatus =
           selectedStatus === 'all' ||
           normalizeStatusKey(inv.status) === normalizeStatusKey(selectedStatus);
         return matchesSearch && matchesPeriod && matchesClient && matchesStatus;
       })
       .sort((a, b) => new Date(b.date || '1900-01-01').getTime() - new Date(a.date || '1900-01-01').getTime());
-  }, [invoices, searchTerm, selectedPeriods, selectedClient, selectedStatus]);
+  }, [invoices, searchTerm, selectedPeriods, selectedClients, selectedStatus]);
 
   const stats: FinancialStats = useMemo(() => {
     const totalInvoices = filteredInvoices.length;
@@ -1016,7 +1034,10 @@ const App: React.FC = () => {
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setIsPeriodFilterOpen((current) => !current)}
+                onClick={() => {
+                  setIsPeriodFilterOpen((current) => !current);
+                  setIsClientFilterOpen(false);
+                }}
                 className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2 min-w-[210px] justify-between"
               >
                 <span className="flex items-center gap-2 min-w-0">
@@ -1080,11 +1101,75 @@ const App: React.FC = () => {
                 </div>
               )}
             </div>
-            <div className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2">
-              <UserIcon size={12} className="text-slate-400" />
-              <select className="bg-transparent border-none outline-none text-[10px] font-black text-slate-500 uppercase max-w-[150px]" value={selectedClient} onChange={(e) => setSelectedClient(e.target.value)}>
-                {uniqueClients.map((c) => <option key={c} value={c}>{c === 'all' ? 'Todos los clientes' : c}</option>)}
-              </select>
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setIsClientFilterOpen((current) => !current);
+                  setIsPeriodFilterOpen(false);
+                }}
+                className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2 min-w-[220px] justify-between"
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <UserIcon size={12} className="text-slate-400 shrink-0" />
+                  <span className="truncate text-[10px] font-black text-slate-500 uppercase">{selectedClientLabel}</span>
+                </span>
+                {selectedClients.length > 0 && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setSelectedClients([]);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        setSelectedClients([]);
+                      }
+                    }}
+                    className="rounded-full p-0.5 text-slate-400 hover:bg-slate-200 hover:text-slate-600"
+                    aria-label="Limpiar clientes"
+                  >
+                    <X size={12} />
+                  </span>
+                )}
+              </button>
+              {isClientFilterOpen && (
+                <div className="absolute left-0 top-[calc(100%+0.5rem)] z-30 w-80 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl shadow-slate-200/70">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-slate-500">Clientes</p>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedClients([])}
+                      className="text-[10px] font-black uppercase tracking-widest text-blue-600"
+                    >
+                      Todos
+                    </button>
+                  </div>
+                  <div className="max-h-72 overflow-y-auto p-2 custom-scrollbar">
+                    {uniqueClients.length === 0 ? (
+                      <p className="px-3 py-4 text-sm font-bold text-slate-400">Sin clientes disponibles</p>
+                    ) : (
+                      uniqueClients.map((client) => (
+                        <label
+                          key={client}
+                          className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2 text-sm font-bold text-slate-600 hover:bg-slate-50"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600"
+                            checked={selectedClients.includes(client)}
+                            onChange={() => toggleSelectedClient(client)}
+                          />
+                          <span className="min-w-0 flex-1 break-words uppercase">{client}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
             <div className="bg-slate-50 border border-slate-100 rounded-lg px-4 py-2 flex items-center gap-2">
               <CheckCircle2 size={12} className="text-slate-400" />
