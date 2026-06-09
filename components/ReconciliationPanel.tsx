@@ -641,9 +641,6 @@ const ReconciliationPanel: React.FC<Props> = ({
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-bold text-slate-800 truncate">{transaction.description}</p>
-                  <p className="text-xs font-bold text-slate-400 mt-1 uppercase">
-                    Ref: {transaction.reference || 'Sin referencia'}
-                  </p>
                 </div>
                 <div className="min-w-0">
                   {matchedInvoice ? (
