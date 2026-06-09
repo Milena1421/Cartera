@@ -1,74 +1,28 @@
-import { GoogleGenAI, Type, createPartFromBase64, createPartFromText } from "@google/genai";
 import { Invoice, AIAuditFinding, BankTransaction } from "../types";
+
+const postGeminiJson = async <T>(endpoint: string, payload: unknown): Promise<T> => {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null);
+    throw new Error(errorPayload?.error || `No se pudo completar la solicitud de IA (${response.status}).`);
+  }
+
+  return response.json() as Promise<T>;
+};
 
 export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData: any[]): Promise<Invoice[]> => {
   if (mappedInvoices.length === 0) return [];
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
-      return mappedInvoices;
-    }
-    const ai = new GoogleGenAI({ apiKey });
-    const context = mappedInvoices.map((inv, idx) => ({
-      index: idx,
-      current_mapping: {
-        client: inv.clientName,
-        invoice: inv.invoiceNumber,
-        desc: inv.description,
-        total: inv.total,
-        iva: inv.iva
-      },
-      siigo_raw_source: {
-        customer: rawSiigoData[idx]?.customer,
-        items: rawSiigoData[idx]?.items?.map((it: any) => ({ d: it.description, n: it.name })),
-        financials: {
-          t: rawSiigoData[idx]?.total,
-          tv: rawSiigoData[idx]?.total_value,
-          c: rawSiigoData[idx]?.cost,
-          tx: rawSiigoData[idx]?.taxes
-        }
-      }
-    }));
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `ACTUA COMO UN AUDITOR FINANCIERO SENIOR.
-      Tu mision es asegurar que los datos de la API de Siigo se hayan mapeado correctamente.
-
-      ERRORES CRITICOS A CORREGIR:
-      1. CRUCE DE CAMPOS: Si el current_mapping.client es una frase larga y tecnica, es un error.
-      2. VALORES EN CERO: Si current_mapping.total es 0 pero ves un total explicito en siigo_raw_source.financials, corrigelo.
-      2B. IVA: NO calcules IVA por diferencia entre total y subtotal. Solo corrige IVA si existe un campo/impuesto IVA explicito en taxes o cost. Si no hay IVA explicito, manten 0.
-      3. DESCRIPCION: Asegurate de que la descripcion sea la del servicio prestado, no el nombre del cliente.
-
-      REGLA DE ORO: El nombre del cliente nunca es una descripcion tecnica.
-
-      PROCESAR ESTOS DATOS:
-      ${JSON.stringify(context)}`,
-      config: {
-        systemInstruction: "NO INVENTES DATOS. Si no encuentras el cliente real en el RAW, manten el original pero limpialo de NITs. Responde estrictamente en JSON.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              index: { type: Type.INTEGER },
-              correctedClient: { type: Type.STRING },
-              correctedDescription: { type: Type.STRING },
-              correctedTotal: { type: Type.NUMBER },
-              correctedIva: { type: Type.NUMBER },
-              hasChanges: { type: Type.BOOLEAN }
-            },
-            required: ["index", "hasChanges"],
-          },
-        },
-      },
+    const { corrections } = await postGeminiJson<{ corrections: any[] }>('/api/gemini/audit-siigo-mapping', {
+      mappedInvoices,
+      rawSiigoData,
     });
-
-    const corrections: any[] = JSON.parse(response.text || "[]");
 
     return mappedInvoices.map((inv, idx) => {
       const corr = corrections.find((c) => c.index === idx);
@@ -98,36 +52,7 @@ export const auditSiigoMapping = async (mappedInvoices: Invoice[], rawSiigoData:
 export const parseCSVWithAI = async (rawCsvText: string): Promise<Invoice[]> => {
   if (!rawCsvText || rawCsvText.trim().length < 20) return [];
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
-      return [];
-    }
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Analiza este CSV y extrae datos de cartera: ${rawCsvText.substring(0, 30000)}`,
-      config: {
-        systemInstruction: "Extrae clientName, invoiceNumber, date y total solo cuando existan. No inventes fechas ni descripciones.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              clientName: { type: Type.STRING },
-              invoiceNumber: { type: Type.STRING },
-              date: { type: Type.STRING },
-              total: { type: Type.NUMBER },
-              description: { type: Type.STRING }
-            },
-            required: ["clientName", "invoiceNumber", "total"],
-          },
-        },
-      },
-    });
-
-    const extracted: any[] = JSON.parse(response.text || "[]");
+    const { extracted } = await postGeminiJson<{ extracted: any[] }>('/api/gemini/parse-csv', { rawCsvText });
     return extracted
       .map((item, idx) => ({
         id: `csv-${Date.now()}-${idx}`,
@@ -232,80 +157,18 @@ const dedupeBankTransactions = (transactions: BankTransaction[]) => {
   });
 };
 
-const buildPendingInvoiceContext = (invoices: Invoice[]) =>
-  invoices
-    .filter((invoice) =>
-      invoice.status !== 'Pagada' &&
-      (Number(invoice.debtValue) || 0) > 0 &&
-      !invoice.paymentDate &&
-      (Number(invoice.paidAmount) || 0) <= 0
-    )
-    .sort((a, b) => new Date(a.date || '1900-01-01').getTime() - new Date(b.date || '1900-01-01').getTime())
-    .slice(0, 250)
-    .map((invoice) => ({
-      invoiceNumber: invoice.invoiceNumber,
-      clientName: invoice.clientName,
-      documentNumber: invoice.documentNumber || '',
-      issueDate: invoice.date || '',
-      pendingAmount: Number(invoice.debtValue) || 0,
-      total: Number(invoice.total) || 0,
-    }));
-
 export const parseBankStatementPdfWithAI = async (file: File, invoices: Invoice[] = []): Promise<BankTransaction[]> => {
   if (!file || file.size === 0) return [];
 
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY no esta configurada en el entorno.");
-    }
-
-    const ai = new GoogleGenAI({ apiKey });
     const base64Pdf = await fileToBase64(file);
-    const pendingInvoiceContext = buildPendingInvoiceContext(invoices);
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: [
-        createPartFromBase64(base64Pdf, file.type || 'application/pdf'),
-        createPartFromText(`Extrae del extracto bancario UNICAMENTE pagos de clientes recibidos en el banco.
-
-Reglas:
-- Incluir solo pagos de clientes: consignaciones, transferencias recibidas, recaudos, pagos de proveedores/clientes o abonos que puedan pagar facturas de cartera.
-- Usa la lista de facturas pendientes como contexto principal. Extrae movimientos cuyo tercero, NIT/documento o valor coincida razonablemente con esas facturas.
-- Si el banco muestra conceptos como PAGO DE PROV, PAGO PROVEEDORES, ABONO PROV o texto similar, tratalo como posible pago de cliente si coincide con un tercero, NIT o valor de la cartera pendiente.
-- Excluir ingresos que NO sean pagos de clientes: intereses de ahorro, intereses, rendimientos, capitalizaciones, saldos, ajustes, reversos, debitos, retiros, comisiones, impuestos, IVA, GMF, encabezados, totales, subtotales y lineas sin valor real.
-- Si el concepto dice INTERESES AHORRO, INTERES AHORRO, RENDIMIENTO o algo similar, NO lo incluyas.
-- No inventes datos. Si no hay NIT, referencia o factura, deja el campo vacio.
-- El valor debe ser positivo, en pesos colombianos, sin separadores.
-- La fecha debe salir en formato YYYY-MM-DD cuando sea posible.
-- La descripcion debe contener tercero/pagador y concepto visible.
-- En reference coloca NIT, documento, comprobante o numero de factura visible que ayude al cruce.
-
-Facturas pendientes de cartera:
-${JSON.stringify(pendingInvoiceContext)}`)
-      ],
-      config: {
-        systemInstruction: "Eres un extractor contable. Devuelve JSON estricto. Si el PDF es escaneado, lee visualmente la tabla. Omite cualquier fila dudosa, ingresos financieros o movimientos que no sean pagos de clientes.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              date: { type: Type.STRING },
-              description: { type: Type.STRING },
-              amount: { type: Type.NUMBER },
-              reference: { type: Type.STRING },
-            },
-            required: ["date", "description", "amount"],
-          },
-        },
-      },
+    const { transactions } = await postGeminiJson<{ transactions: Array<Partial<BankTransaction>> }>('/api/gemini/parse-bank-statement-pdf', {
+      base64Pdf,
+      mimeType: file.type || 'application/pdf',
+      invoices,
     });
 
-    const extracted: Array<Partial<BankTransaction>> = JSON.parse(response.text || "[]");
-    return dedupeBankTransactions(extracted
+    return dedupeBankTransactions(transactions
       .map((item, index) => ({
         id: `bank-pdf-${Date.now()}-${index}`,
         date: String(item.date || '').trim(),
@@ -328,34 +191,8 @@ ${JSON.stringify(pendingInvoiceContext)}`)
 export const runAIAudit = async (invoices: Invoice[]): Promise<AIAuditFinding[]> => {
   if (!invoices || invoices.length === 0) return [];
   try {
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      console.error("GEMINI_API_KEY no esta configurada en el entorno.");
-      return [];
-    }
-    const ai = new GoogleGenAI({ apiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Cartera: ${JSON.stringify(invoices.map(i => ({ id: i.id, cli: i.clientName, debt: i.debtValue, mora: i.moraDays })))}`,
-      config: {
-        systemInstruction: "Genera alertas para deudas mayores a 60 dias.",
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING },
-              title: { type: Type.STRING },
-              description: { type: Type.STRING },
-              invoiceId: { type: Type.STRING }
-            },
-            required: ["type", "title", "description", "invoiceId"],
-          },
-        },
-      },
-    });
-    return JSON.parse(response.text || "[]");
+    const { findings } = await postGeminiJson<{ findings: AIAuditFinding[] }>('/api/gemini/run-ai-audit', { invoices });
+    return findings;
   } catch (error) {
     console.error("Falla en Auditoria de IA (runAIAudit):", error);
     return [];
