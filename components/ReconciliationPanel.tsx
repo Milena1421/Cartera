@@ -205,21 +205,36 @@ const getInvoicePriorityList = (invoices: Invoice[]) => {
   return oldestFirst.filter(invoiceIsPending);
 };
 
+const getRelatedPendingInvoicesForTransaction = (transaction: BankTransaction, invoices: Invoice[]) => {
+  const pendingInvoices = getInvoicePriorityList(invoices);
+  const documentCandidates = extractDocumentCandidates(`${transaction.reference || ''} ${transaction.description || ''}`);
+
+  if (documentCandidates.length > 0) {
+    const documentMatches = pendingInvoices.filter((invoice) =>
+      documentCandidates.includes(normalizeDocumentNumber(invoice.documentNumber))
+    );
+    if (documentMatches.length > 0) return documentMatches;
+  }
+
+  const descriptionTokens = extractTokens(`${transaction.description || ''} ${transaction.reference || ''}`);
+  if (descriptionTokens.length === 0) return [];
+
+  return pendingInvoices.filter((invoice) => {
+    const clientTokens = extractTokens(invoice.clientName);
+    return clientTokens.some((token) => descriptionTokens.includes(token));
+  });
+};
+
 const resolveTransactionMatches = (transactions: BankTransaction[], invoices: Invoice[]): ReconciliationMatch[] => {
   const matchesByTransactionId = new Map<string, Invoice | undefined>();
   const assignedInvoiceIds = new Set<string>();
   const unmatchedTransactions: BankTransaction[] = [];
-  const seenPaymentKeys = new Set<string>();
 
   for (const transaction of transactions) {
-    const paymentKey = getPaymentIdentityKey(transaction);
-    if (seenPaymentKeys.has(paymentKey)) {
-      matchesByTransactionId.set(transaction.id, undefined);
-      continue;
-    }
-    seenPaymentKeys.add(paymentKey);
-
-    const directMatch = findDirectInvoiceMatch(transaction, invoices);
+    const directMatch = findDirectInvoiceMatch(
+      transaction,
+      invoices.filter((invoice) => !assignedInvoiceIds.has(invoice.id))
+    );
     if (directMatch) {
       matchesByTransactionId.set(transaction.id, directMatch);
       assignedInvoiceIds.add(directMatch.id);
@@ -244,10 +259,13 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     const sortedTransactions = sortTransactionsOldestFirst(groupTransactions);
 
     sortedTransactions.forEach((transaction) => {
-      const candidateInvoice = relatedInvoices.find((invoice) =>
+      const exactAmountInvoice = relatedInvoices.find((invoice) =>
         !assignedInvoiceIds.has(invoice.id) &&
         (amountsMatch(transaction.amount, invoice.debtValue) || amountsMatch(transaction.amount, getInvoiceFaceValue(invoice)))
       );
+      const oldestPendingInvoice = relatedInvoices.find((invoice) => !assignedInvoiceIds.has(invoice.id));
+      const candidateInvoice = exactAmountInvoice || oldestPendingInvoice;
+
       if (candidateInvoice) {
         matchesByTransactionId.set(transaction.id, candidateInvoice);
         assignedInvoiceIds.add(candidateInvoice.id);
@@ -266,6 +284,17 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     if (fallbackMatch) {
       matchesByTransactionId.set(transaction.id, fallbackMatch);
       assignedInvoiceIds.add(fallbackMatch.id);
+      continue;
+    }
+
+    const oldestRelatedInvoice = getRelatedPendingInvoicesForTransaction(
+      transaction,
+      invoices.filter((invoice) => !assignedInvoiceIds.has(invoice.id))
+    )[0];
+
+    if (oldestRelatedInvoice) {
+      matchesByTransactionId.set(transaction.id, oldestRelatedInvoice);
+      assignedInvoiceIds.add(oldestRelatedInvoice.id);
     }
   }
 
@@ -457,12 +486,11 @@ const ReconciliationPanel: React.FC<Props> = ({
 
   const applyMatches = async () => {
     const resolvedMatches = resolveTransactionMatches(filteredTransactions, invoices);
-    const usedPaymentKeys = new Set<string>();
     const payableMatches = resolvedMatches.filter(({ transaction, matchedInvoice }) => {
       if (!matchedInvoice) return false;
-      const paymentKey = getPaymentIdentityKey(transaction);
-      if (usedPaymentKeys.has(paymentKey)) return false;
-      usedPaymentKeys.add(paymentKey);
+      if (!invoiceIsPending(matchedInvoice)) return false;
+      const paymentAmount = Math.abs(Number(transaction.amount) || 0);
+      if (paymentAmount <= 0) return false;
       return true;
     });
     const matchedTransactionIds = new Set(
