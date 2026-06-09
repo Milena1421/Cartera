@@ -69,10 +69,7 @@ export const supabaseService = {
 
   calculateDebt(invoice: Partial<Invoice>) {
     if (this.isNoteCreditStatus(invoice.status)) return 0;
-    if (
-      this.normalizePaymentStatus(invoice.status) === 'Pagada' &&
-      (this.hasMeaningfulDate(invoice.paymentDate) || (Number(invoice.paidAmount) || 0) > 0)
-    ) {
+    if (this.hasRegisteredPayment(invoice)) {
       return 0;
     }
     const total = getInvoiceFaceValue({
@@ -94,6 +91,10 @@ export const supabaseService = {
     if (this.isNoteCreditStatus(status)) return NOTE_CREDIT_STATUS;
     if (debt > 0) return 'Pendiente por pagar';
     return this.normalizePaymentStatus(status);
+  },
+
+  hasRegisteredPayment(invoice: Partial<Invoice>) {
+    return this.hasMeaningfulDate(invoice.paymentDate) && (Number(invoice.paidAmount) || 0) > 0;
   },
 
   getFirstDefined(row: any, keys: string[]) {
@@ -756,6 +757,11 @@ export const supabaseService = {
           normalizedInvoice.description = '';
           normalizedInvoice.date = '';
           normalizedInvoice.dueDate = '';
+        }
+
+        if (!this.isNoteCreditStatus(normalizedInvoice.status) && this.hasRegisteredPayment(normalizedInvoice)) {
+          normalizedInvoice.status = 'Pagada';
+          normalizedInvoice.debtValue = 0;
         }
 
         if (normalizedInvoice.total > 0) {
