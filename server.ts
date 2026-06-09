@@ -76,10 +76,21 @@ async function startServer() {
       error.response?.data?.message ||
       error.message ||
       'Error desconocido con Gemini.';
+    const status = error.response?.status || 500;
+    const geminiStatus = String(error.response?.data?.error?.status || '').toUpperCase();
+    const normalizedDetail = String(detail);
+
+    if (status === 429 || geminiStatus === 'RESOURCE_EXHAUSTED' || normalizedDetail.toLowerCase().includes('spending cap')) {
+      return {
+        detail: 'Gemini alcanzo el limite mensual de facturacion o cuota. Revisa AI Studio > Billing y aumenta el spending cap o espera el reinicio del periodo.',
+        status: 429,
+        payload: error.response?.data,
+      };
+    }
 
     return {
-      detail: String(detail),
-      status: error.message?.includes('GEMINI_API_KEY') ? 503 : (error.response?.status || 500),
+      detail: normalizedDetail,
+      status: error.message?.includes('GEMINI_API_KEY') ? 503 : status,
       payload: error.response?.data,
     };
   }
