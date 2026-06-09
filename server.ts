@@ -59,11 +59,15 @@ async function startServer() {
   }
 
   function getGeminiAI() {
-    const apiKey = String(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || '').trim();
+    const apiKey = String(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || env.GOOGLE_GENAI_API_KEY || env.VITE_GEMINI_API_KEY || '').trim();
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY no esta configurada en el entorno del servidor.');
     }
     return new GoogleGenAI({ apiKey });
+  }
+
+  function hasGeminiApiKey() {
+    return Boolean(String(env.GEMINI_API_KEY || env.GOOGLE_API_KEY || env.GOOGLE_GENAI_API_KEY || env.VITE_GEMINI_API_KEY || '').trim());
   }
 
   function normalizeGeminiError(error: any) {
@@ -179,7 +183,7 @@ async function startServer() {
 
   app.get('/api/gemini/config', (_req, res) => {
     res.status(200).json({
-      ok: Boolean(String(env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || '').trim()),
+      ok: hasGeminiApiKey(),
     });
   });
 
