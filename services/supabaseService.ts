@@ -3,8 +3,8 @@ import { createClient } from '@supabase/supabase-js';
 import { BankTransaction, Invoice } from '../types';
 import { getInvoiceFaceValue } from '../utils/invoiceAmounts';
 
-const SUPABASE_URL = 'https://xfsbogjozqvaphoapqnz.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_PL1m0jMzLteH19aQWAY2oA_pb6-FMIe';
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || 'https://xfsbogjozqvaphoapqnz.supabase.co';
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_PL1m0jMzLteH19aQWAY2oA_pb6-FMIe';
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -13,6 +13,8 @@ const TABLE_NAME = 'invoices';
 const CLIENTS_TABLE_NAME = 'clientes';
 const BUCKET_NAME = 'invoice-documents';
 const BANK_TRANSACTIONS_FOLDER = 'bank-transactions';
+const BANK_TRANSACTIONS_BUCKET_ERROR =
+  'No existe o no es accesible el bucket "invoice-documents" en Supabase. Crealo en Storage y habilita permisos de lectura/escritura para "bank-transactions/*".';
 const SYSTEM_GENERATED_OBSERVATIONS = [
   'Pendiente confirmacion de recibido por parte de almacen.',
   'Se solicita envio de RUT actualizado para proceso de pago.',
@@ -67,6 +69,12 @@ export const supabaseService = {
 
   calculateDebt(invoice: Partial<Invoice>) {
     if (this.isNoteCreditStatus(invoice.status)) return 0;
+    if (
+      this.normalizePaymentStatus(invoice.status) === 'Pagada' &&
+      (this.hasMeaningfulDate(invoice.paymentDate) || (Number(invoice.paidAmount) || 0) > 0)
+    ) {
+      return 0;
+    }
     const total = getInvoiceFaceValue({
       subtotal: Number(invoice.subtotal) || 0,
       iva: Number(invoice.iva) || 0,
@@ -77,7 +85,8 @@ export const supabaseService = {
       (Number(invoice.creditAmount) || 0) +
       (Number(invoice.reteFuente) || 0) +
       (Number(invoice.reteIva) || 0) +
-      (Number(invoice.reteIca) || 0);
+      (Number(invoice.reteIca) || 0) +
+      (Number(invoice.bankCommission) || 0);
     return Math.max(0, this.roundCurrency(total - deductions));
   },
 
@@ -581,6 +590,7 @@ export const supabaseService = {
           reteFuente: Number(inv.reteFuente) || 0,
           reteIva: Number(inv.reteIva) || 0,
           reteIca: Number(inv.reteIca) || 0,
+          bankCommission: Number(inv.bankCommission) || 0,
           status,
           debtValue,
           observations: this.sanitizeObservation(inv.observations, inv),
@@ -842,6 +852,10 @@ export const supabaseService = {
         .download(path);
 
       if (error) {
+        if (error.message.toLowerCase().includes('bucket not found')) {
+          console.warn(BANK_TRANSACTIONS_BUCKET_ERROR);
+          return [];
+        }
         if (!error.message.toLowerCase().includes('not found')) {
           console.warn('No se pudieron cargar movimientos bancarios:', error.message);
         }
@@ -880,14 +894,20 @@ export const supabaseService = {
         });
 
       if (error) {
+        if (error.message.toLowerCase().includes('bucket not found')) {
+          throw new Error(BANK_TRANSACTIONS_BUCKET_ERROR);
+        }
         console.warn('No se pudieron guardar movimientos bancarios:', error.message);
-        return false;
+        throw new Error(`No se pudieron guardar movimientos bancarios en Supabase Storage: ${error.message}`);
       }
 
-      return true;
+      return { ok: true as const };
     } catch (err) {
       console.warn('No se pudieron sincronizar movimientos bancarios:', err);
-      return false;
+      return {
+        ok: false as const,
+        error: err instanceof Error ? err.message : 'No se pudieron sincronizar movimientos bancarios.',
+      };
     }
   },
 

@@ -227,6 +227,10 @@ const ReportTable: React.FC<Props> = ({
                         <span className="text-slate-500 uppercase font-black text-[10px] tracking-[0.18em]">R. ICA</span>
                         <span className="text-sm font-bold text-slate-600">{formatCurrency(inv.reteIca)}</span>
                       </div>
+                      <div className="flex items-center justify-between gap-3">
+                        <span className="text-slate-500 uppercase font-black text-[10px] tracking-[0.18em]">Comisiones</span>
+                        <span className="text-sm font-bold text-slate-600">{formatCurrency(inv.bankCommission)}</span>
+                      </div>
                     </div>
                   </section>
 

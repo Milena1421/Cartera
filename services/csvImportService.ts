@@ -147,7 +147,7 @@ export const parseCarteraCsv = (text: string): Invoice[] => {
     const paidAmount = parseNumber(row[paidAmountIndex] || '');
     const paidWithWithholdings = parseNumber(row[paidWithholdingsIndex] || '');
     const providedDebt = parseNumber(row[debtIndex] || '');
-    const totalDeductions = paidAmount + creditAmount + reteFuente + reteIva + reteIca;
+    const totalDeductions = paidAmount + creditAmount + reteFuente + reteIva + reteIca + bankCommission;
     const statusText = cleanText(row[statusIndex] || '').toUpperCase();
     const rawStatus: PaymentStatus =
       statusText === 'PAGADA'

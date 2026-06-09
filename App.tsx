@@ -129,6 +129,45 @@ const isNoteCreditStatus = (value?: string) => normalizeStatusKey(value) === NOT
 const normalizeDigits = (value?: string) =>
   String(value || '').replace(/[^\d]/g, '').trim();
 
+const normalizeSearchText = (value?: string) =>
+  String(value || '')
+    .replace(/Ã©/g, 'e')
+    .replace(/\uFFFD/g, 'e')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+
+const invoiceMatchesSearchTerm = (invoice: Invoice, rawSearchTerm: string) => {
+  const searchText = normalizeSearchText(rawSearchTerm);
+  if (!searchText) return true;
+
+  const searchTokens = searchText.split(/\s+/).filter(Boolean);
+  const searchCompact = searchText.replace(/\s+/g, '');
+  const searchDigits = normalizeDigits(rawSearchTerm);
+  const searchableText = normalizeSearchText([
+    invoice.clientName,
+    invoice.documentType,
+    invoice.documentNumber,
+    invoice.invoiceNumber,
+  ].filter(Boolean).join(' '));
+  const searchableCompact = searchableText.replace(/\s+/g, '');
+  const searchableDigits = normalizeDigits([
+    invoice.documentNumber,
+    invoice.clientName,
+    invoice.invoiceNumber,
+  ].filter(Boolean).join(' '));
+
+  const matchesText = searchTokens.every((token) =>
+    searchableText.includes(token) || searchableCompact.includes(token)
+  );
+  const matchesCompact = Boolean(searchCompact) && searchableCompact.includes(searchCompact);
+  const matchesDigits = Boolean(searchDigits) && searchableDigits.includes(searchDigits);
+
+  return matchesText || matchesCompact || matchesDigits;
+};
+
 const getClientDisplayName = (invoice: Invoice) => {
   const clientName = String(invoice.clientName || '').trim();
   const normalizedClientDigits = normalizeDigits(clientName);
@@ -324,9 +363,12 @@ const App: React.FC = () => {
 
     if (!currentUser?.username) return;
 
-    const saved = await supabaseService.syncBankTransactions(currentUser.username, normalizedTransactions);
-    if (!saved) {
-      setErrorMessage('La conciliacion quedo guardada localmente, pero no se pudo sincronizar con produccion.');
+    const syncResult = await supabaseService.syncBankTransactions(currentUser.username, normalizedTransactions);
+    if (!syncResult.ok) {
+      setCloudStatus('error');
+      setErrorMessage(`La conciliacion quedo guardada localmente, pero no se pudo sincronizar con produccion. ${syncResult.error}`);
+    } else {
+      setCloudStatus('connected');
     }
   }, [currentUser?.username]);
 
@@ -485,7 +527,11 @@ const App: React.FC = () => {
     setStoredBankTransactions(currentUser.username, mergedTransactions);
 
     if (mergedTransactions.length > 0) {
-      await supabaseService.syncBankTransactions(currentUser.username, mergedTransactions);
+      const syncResult = await supabaseService.syncBankTransactions(currentUser.username, mergedTransactions);
+      if (!syncResult.ok) {
+        setCloudStatus('error');
+        setErrorMessage(`Los movimientos bancarios locales se cargaron, pero no se pudieron sincronizar con produccion. ${syncResult.error}`);
+      }
     }
   }, [currentUser?.username]);
 
@@ -823,9 +869,7 @@ const App: React.FC = () => {
         };
       })
       .filter((inv) => {
-        const matchesSearch =
-          (inv.clientName?.toLowerCase() || '').includes(searchTerm.toLowerCase()) ||
-          (inv.invoiceNumber?.toLowerCase() || '').includes(searchTerm.toLowerCase());
+        const matchesSearch = invoiceMatchesSearchTerm(inv, searchTerm);
         const invoicePeriod = getPeriodFromDate(inv.date);
         const matchesPeriod = selectedPeriods.length === 0 || selectedPeriods.includes(invoicePeriod);
         const matchesClient = selectedClients.length === 0 || selectedClients.includes(inv.clientName);
@@ -1021,7 +1065,7 @@ const App: React.FC = () => {
             <div className="flex-1 relative">
               <div className="flex items-center gap-3 bg-slate-50 border border-slate-100 rounded-xl px-4 py-3 w-full">
                 <Search size={18} className="text-slate-400" />
-                <input type="text" placeholder="Buscar por cliente o factura..." className="bg-transparent border-none outline-none text-sm w-full font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                <input type="text" placeholder="Buscar por cliente, NIT o factura..." className="bg-transparent border-none outline-none text-sm w-full font-medium" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
               </div>
             </div>
             {canModifyInvoices && (

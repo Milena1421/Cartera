@@ -79,6 +79,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     reteFuente: '',
     reteIva: '',
     reteIca: '',
+    bankCommission: '',
   });
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -107,6 +108,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
         reteFuente: initialData.reteFuente !== undefined ? formatDecimalValue(initialData.reteFuente) : '',
         reteIva: initialData.reteIva !== undefined ? formatDecimalValue(initialData.reteIva) : '',
         reteIca: initialData.reteIca !== undefined ? formatDecimalValue(initialData.reteIca) : '',
+        bankCommission: initialData.bankCommission !== undefined ? formatDecimalValue(initialData.bankCommission) : '',
       });
     } else {
       const today = new Date().toISOString().split('T')[0];
@@ -130,6 +132,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
         reteFuente: '',
         reteIva: '',
         reteIca: '',
+        bankCommission: '',
       });
     }
   }, [initialData, isOpen]);
@@ -169,11 +172,12 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
     const rf = parseNumericInput(formData.reteFuente);
     const ri = parseNumericInput(formData.reteIva);
     const rc = parseNumericInput(formData.reteIca);
+    const bankCommission = parseNumericInput(formData.bankCommission);
 
     const normalizedStatus = normalizePaymentStatus(formData.status);
     const debt = normalizedStatus === NOTE_CREDIT_STATUS
       ? 0
-      : Math.max(0, roundCurrency(totalNum - paidNum - creditNum - rf - ri - rc));
+      : Math.max(0, roundCurrency(totalNum - paidNum - creditNum - rf - ri - rc - bankCommission));
     const status = normalizedStatus === NOTE_CREDIT_STATUS
       ? NOTE_CREDIT_STATUS
       : debt > 0
@@ -197,6 +201,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
       reteFuente: rf,
       reteIva: ri,
       reteIca: rc,
+      bankCommission,
       status,
       paymentDate: formData.paymentDate || undefined,
       creditDate: formData.creditDate || undefined,
@@ -378,7 +383,7 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
 
           <div className="space-y-5">
             <h3 className="text-[11px] font-black text-amber-600 uppercase tracking-[0.2em] border-b border-slate-100 pb-2">Retenciones manuales</h3>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="space-y-2">
                 <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">R. Fuente</label>
                 <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none" value={formData.reteFuente} onChange={e => setFormData({ ...formData, reteFuente: e.target.value })} />
@@ -390,6 +395,10 @@ const ManualInvoiceModal: React.FC<Props> = ({ isOpen, onClose, onSave, initialD
               <div className="space-y-2">
                 <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">R. ICA</label>
                 <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none" value={formData.reteIca} onChange={e => setFormData({ ...formData, reteIca: e.target.value })} />
+              </div>
+              <div className="space-y-2">
+                <label className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Comisiones</label>
+                <input type="text" inputMode="decimal" className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold outline-none" value={formData.bankCommission} onChange={e => setFormData({ ...formData, bankCommission: e.target.value })} />
               </div>
             </div>
           </div>
