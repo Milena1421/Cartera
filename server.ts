@@ -15,6 +15,11 @@ async function startServer() {
   let siigoToken: string | null = null;
   let siigoTokenExpiresAt = 0;
 
+  function clearSiigoToken() {
+    siigoToken = null;
+    siigoTokenExpiresAt = 0;
+  }
+
   function firstEnvValue(keys: string[], fallback = '') {
     for (const key of keys) {
       const value = String(env[key] || '').trim();
@@ -144,8 +149,37 @@ async function startServer() {
     };
   }
 
-  async function getSiigoToken(): Promise<string> {
-    if (siigoToken && Date.now() < siigoTokenExpiresAt) return siigoToken;
+  function getSiigoAuthHeaders(siigoConfig: ReturnType<typeof getSiigoConfig>) {
+    return {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'Partner-Id': siigoConfig.partnerId,
+    };
+  }
+
+  function getSiigoApiHeaders(siigoConfig: ReturnType<typeof getSiigoConfig>, accessToken: string) {
+    return {
+      'Authorization': `Bearer ${accessToken}`,
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'Partner-Id': siigoConfig.partnerId,
+    };
+  }
+
+  function decodeJwtPayload(token: string) {
+    try {
+      const payload = token.split('.')[1];
+      if (!payload) return null;
+      const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+      return JSON.parse(Buffer.from(padded, 'base64').toString('utf8'));
+    } catch {
+      return null;
+    }
+  }
+
+  async function getSiigoToken(forceRefresh = false): Promise<string> {
+    if (!forceRefresh && siigoToken && Date.now() < siigoTokenExpiresAt) return siigoToken;
     const siigoConfig = getSiigoConfig();
 
     const missing = [];
@@ -155,20 +189,25 @@ async function startServer() {
       throw new Error(`Credenciales de Siigo no configuradas. Faltan: ${missing.join(', ')}.`);
     }
 
-    const response = await axios.post(
-      siigoConfig.authUrl,
-      {
-        username: siigoConfig.username,
-        access_key: siigoConfig.accessKey,
-      },
-      {
+    let response;
+    try {
+      response = await axios.post(
+        siigoConfig.authUrl,
+        {
+          username: siigoConfig.username,
+          access_key: siigoConfig.accessKey,
+        },
+        {
         headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'Partner-Id': siigoConfig.partnerId,
+          ...getSiigoAuthHeaders(siigoConfig),
         },
       },
-    );
+      );
+    } catch (error: any) {
+      clearSiigoToken();
+      const normalized = normalizeSiigoError(error);
+      throw new Error(`No se pudo autenticar con Siigo: ${normalized.detail}`);
+    }
 
     siigoToken = response.data?.access_token;
     if (!siigoToken) {
@@ -198,6 +237,69 @@ async function startServer() {
       authUrl: siigoConfig.authUrl,
       sources: siigoConfig.sources,
     });
+  });
+
+  app.get('/api/siigo/diagnostics', async (_req, res) => {
+    const siigoConfig = getSiigoConfig();
+    const result: any = {
+      config: {
+        ok: Boolean(siigoConfig.username && siigoConfig.accessKey),
+        hasUsername: Boolean(siigoConfig.username),
+        hasAccessKey: Boolean(siigoConfig.accessKey),
+        hasPartnerId: Boolean(siigoConfig.partnerId),
+        apiUrl: siigoConfig.apiUrl,
+        authUrl: siigoConfig.authUrl,
+        partnerId: siigoConfig.partnerId,
+        sources: siigoConfig.sources,
+      },
+      auth: {
+        ok: false,
+      },
+      api: {
+        ok: false,
+      },
+    };
+
+    try {
+      clearSiigoToken();
+      const token = await getSiigoToken(true);
+      const payload = decodeJwtPayload(token);
+      result.auth = {
+        ok: true,
+        tokenLength: token.length,
+        expiresAt: payload?.exp ? new Date(payload.exp * 1000).toISOString() : null,
+        scope: payload?.scope || null,
+        tenantState: payload?.tenant_state || null,
+        companyKey: payload?.cloud_tenant_company_key || null,
+      };
+
+      try {
+        const response = await axios.get(`${siigoConfig.apiUrl}/document-types?type=FV`, {
+          headers: getSiigoApiHeaders(siigoConfig, token),
+        });
+        result.api = {
+          ok: true,
+          status: response.status,
+        };
+        res.status(200).json(result);
+      } catch (error: any) {
+        const normalized = normalizeSiigoError(error);
+        result.api = {
+          ok: false,
+          status: normalized.status,
+          error: normalized.detail,
+        };
+        res.status(normalized.status).json(result);
+      }
+    } catch (error: any) {
+      const normalized = normalizeSiigoError(error);
+      result.auth = {
+        ok: false,
+        status: normalized.status,
+        error: normalized.detail,
+      };
+      res.status(normalized.status).json(result);
+    }
   });
 
   app.get('/api/gemini/config', (_req, res) => {
@@ -424,20 +526,25 @@ ${JSON.stringify(pendingInvoiceContext)}`),
       }
 
       const siigoConfig = getSiigoConfig();
-      const accessToken = await getSiigoToken();
+      const callSiigo = async (forceRefreshToken = false) => {
+        const accessToken = await getSiigoToken(forceRefreshToken);
 
-      // Then, make the actual API call to Siigo
-      const siigoResponse = await axios({
-        method: requestMethod,
-        url: `${siigoConfig.apiUrl}${endpoint}`,
-        headers: {
-          'Authorization': `Bearer ${accessToken}`,
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'Partner-Id': siigoConfig.partnerId,
-        },
-        data: data
-      });
+        return axios({
+          method: requestMethod,
+          url: `${siigoConfig.apiUrl}${endpoint}`,
+          headers: getSiigoApiHeaders(siigoConfig, accessToken),
+          data: data
+        });
+      };
+
+      let siigoResponse;
+      try {
+        siigoResponse = await callSiigo();
+      } catch (error: any) {
+        if (![401, 403].includes(Number(error.response?.status))) throw error;
+        clearSiigoToken();
+        siigoResponse = await callSiigo(true);
+      }
 
       res.json(siigoResponse.data);
     } catch (error: any) {

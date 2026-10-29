@@ -240,9 +240,16 @@ const getRelatedPendingInvoicesForTransaction = (transaction: BankTransaction, i
 const resolveTransactionMatches = (transactions: BankTransaction[], invoices: Invoice[]): ReconciliationMatch[] => {
   const matchesByTransactionId = new Map<string, Invoice | undefined>();
   const assignedInvoiceIds = new Set<string>();
+  const assignedPaymentKeys = new Set<string>();
   const unmatchedTransactions: BankTransaction[] = [];
 
   for (const transaction of transactions) {
+    const paymentKey = getPaymentIdentityKey(transaction);
+    if (assignedPaymentKeys.has(paymentKey)) {
+      unmatchedTransactions.push(transaction);
+      continue;
+    }
+
     const directMatch = findDirectInvoiceMatch(
       transaction,
       invoices.filter((invoice) => !assignedInvoiceIds.has(invoice.id))
@@ -250,6 +257,7 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     if (directMatch) {
       matchesByTransactionId.set(transaction.id, directMatch);
       assignedInvoiceIds.add(directMatch.id);
+      assignedPaymentKeys.add(paymentKey);
     } else {
       unmatchedTransactions.push(transaction);
     }
@@ -271,6 +279,9 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     const sortedTransactions = sortTransactionsOldestFirst(groupTransactions);
 
     sortedTransactions.forEach((transaction) => {
+      const paymentKey = getPaymentIdentityKey(transaction);
+      if (assignedPaymentKeys.has(paymentKey)) return;
+
       const exactAmountInvoice = relatedInvoices.find((invoice) =>
         !assignedInvoiceIds.has(invoice.id) &&
         (amountsMatch(transaction.amount, invoice.debtValue) || amountsMatch(transaction.amount, getInvoiceFaceValue(invoice)))
@@ -281,12 +292,15 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
       if (candidateInvoice) {
         matchesByTransactionId.set(transaction.id, candidateInvoice);
         assignedInvoiceIds.add(candidateInvoice.id);
+        assignedPaymentKeys.add(paymentKey);
       }
     });
   });
 
   for (const transaction of unmatchedTransactions) {
     if (matchesByTransactionId.has(transaction.id)) continue;
+    const paymentKey = getPaymentIdentityKey(transaction);
+    if (assignedPaymentKeys.has(paymentKey)) continue;
 
     const fallbackMatch = findDirectInvoiceMatch(
       transaction,
@@ -296,6 +310,7 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     if (fallbackMatch) {
       matchesByTransactionId.set(transaction.id, fallbackMatch);
       assignedInvoiceIds.add(fallbackMatch.id);
+      assignedPaymentKeys.add(paymentKey);
       continue;
     }
 
@@ -307,6 +322,7 @@ const resolveTransactionMatches = (transactions: BankTransaction[], invoices: In
     if (oldestRelatedInvoice) {
       matchesByTransactionId.set(transaction.id, oldestRelatedInvoice);
       assignedInvoiceIds.add(oldestRelatedInvoice.id);
+      assignedPaymentKeys.add(paymentKey);
     }
   }
 
@@ -524,10 +540,13 @@ const ReconciliationPanel: React.FC<Props> = ({
 
     if (onApplyInvoicePayments) {
       const paidInvoicesById = new Map<string, Invoice>();
+      const appliedPaymentKeys = new Set<string>();
 
       payableMatches.forEach(({ transaction, matchedInvoice }) => {
         if (!matchedInvoice) return;
         if (!invoiceIsPending(matchedInvoice)) return;
+        const paymentKey = getPaymentIdentityKey(transaction);
+        if (appliedPaymentKeys.has(paymentKey)) return;
 
         const paymentAmount = Math.abs(Number(transaction.amount) || 0);
         if (paymentAmount <= 0) return;
@@ -541,6 +560,7 @@ const ReconciliationPanel: React.FC<Props> = ({
           debtValue: nextDebt,
           status: nextDebt > 0 ? 'Pendiente por pagar' : 'Pagada',
         });
+        appliedPaymentKeys.add(paymentKey);
       });
 
       if (paidInvoicesById.size > 0) {

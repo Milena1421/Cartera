@@ -1,6 +1,6 @@
 ﻿import React from 'react';
 import { Invoice, AIAuditFinding } from '../types';
-import { Edit3, Calendar, Landmark, Copy, Check, Trash2 } from 'lucide-react';
+import { Edit3, Calendar, Landmark, Copy, Check, Trash2, Repeat2 } from 'lucide-react';
 import { formatCurrency } from '../utils/formatters';
 
 interface Props {
@@ -12,6 +12,7 @@ interface Props {
   onSelectInvoice?: (invoice: Invoice) => void;
   selectedInvoiceId?: string | null;
   canEdit?: boolean;
+  isRecurringClient?: (invoice: Invoice) => boolean;
 }
 
 const ReportTable: React.FC<Props> = ({
@@ -20,7 +21,8 @@ const ReportTable: React.FC<Props> = ({
   onDelete,
   onSelectInvoice,
   selectedInvoiceId = null,
-  canEdit = true
+  canEdit = true,
+  isRecurringClient = (_invoice: Invoice) => false,
 }) => {
   const [copiedId, setCopiedId] = React.useState<string | null>(null);
 
@@ -109,6 +111,11 @@ const ReportTable: React.FC<Props> = ({
                         <h3 className="font-black text-[20px] md:text-[24px] text-blue-900 leading-snug uppercase tracking-tight break-words">
                           {getClientDisplayName(inv)}
                         </h3>
+                        {isRecurringClient(inv) && (
+                          <span className="mt-2 inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-[10px] font-black uppercase tracking-wider text-violet-700">
+                            <Repeat2 size={12} /> FacturaciÃ³n mensual recurrente
+                          </span>
+                        )}
 
                         <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl px-4 py-3 border bg-slate-50 border-slate-200">
                           <span className="text-slate-500 font-bold text-[13px]">{inv.date}</span>
@@ -128,7 +135,7 @@ const ReportTable: React.FC<Props> = ({
                       </div>
 
                       {canEdit && (
-                        <div className="hidden xl:flex items-center gap-2 shrink-0">
+                        <div className="flex items-center gap-2 shrink-0">
                           <button
                             onClick={(event) => {
                               event.stopPropagation();
@@ -144,10 +151,11 @@ const ReportTable: React.FC<Props> = ({
                               event.stopPropagation();
                               onDelete?.(inv);
                             }}
-                            className="p-2 bg-red-50 text-red-600 rounded-lg"
-                            title="Eliminar factura"
+                            className="flex items-center gap-1.5 px-3 py-2 bg-red-50 text-red-600 rounded-lg font-bold text-xs"
+                            title="Eliminar factura manualmente"
                           >
                             <Trash2 size={16} />
+                            <span>Eliminar</span>
                           </button>
                         </div>
                       )}
@@ -165,30 +173,6 @@ const ReportTable: React.FC<Props> = ({
                     </div>
                   </div>
 
-                  {canEdit && (
-                    <div className="flex xl:hidden items-center gap-2 shrink-0">
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onEdit(inv);
-                        }}
-                        className="p-2 bg-blue-50 text-blue-600 rounded-lg"
-                        title="Editar factura"
-                      >
-                        <Edit3 size={16} />
-                      </button>
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onDelete?.(inv);
-                        }}
-                        className="p-2 bg-red-50 text-red-600 rounded-lg"
-                        title="Eliminar factura"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  )}
                 </div>
 
                 <div className="mt-6 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">

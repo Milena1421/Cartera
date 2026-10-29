@@ -1,8 +1,7 @@
 import React from 'react';
-import { FileText, Receipt, UserRound } from 'lucide-react';
+import { CheckSquare, FileText, Receipt, Square, UserRound } from 'lucide-react';
 import { Invoice } from '../types';
 import { formatCurrency } from '../utils/formatters';
-import { getInvoiceFaceValue } from '../utils/invoiceAmounts';
 
 type ClientSummary = {
   clientName: string;
@@ -15,6 +14,11 @@ type ClientSummary = {
 
 interface Props {
   groups: ClientSummary[];
+  selectedInvoiceIds: string[];
+  onToggleInvoice: (invoiceId: string) => void;
+  onToggleClientInvoices: (invoiceIds: string[]) => void;
+  showOnlySelected: boolean;
+  onShowOnlySelectedChange: (value: boolean) => void;
 }
 
 const formatDate = (value?: string) => {
@@ -63,26 +67,36 @@ const parseInvoiceDate = (value?: string) => {
   return new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
 };
 
-const getInvoiceMoraDaysFromInvoiceDate = (invoice: Invoice) => {
-  const invoiceDate = parseInvoiceDate(invoice.date);
-  if (!invoiceDate) return 0;
+const getInvoiceMoraDaysFromDueDate = (invoice: Invoice) => {
+  const dueDate = parseInvoiceDate(invoice.dueDate);
+  if (!dueDate) return 0;
 
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  invoiceDate.setHours(0, 0, 0, 0);
+  dueDate.setHours(0, 0, 0, 0);
 
-  const diffDays = Math.floor((today.getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24));
+  const diffDays = Math.floor((today.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24));
   return diffDays > 0 ? diffDays : 0;
 };
 
-const PortfolioSummary: React.FC<Props> = ({ groups }) => {
-  const totalInvoices = groups.reduce((acc, group) => acc + group.invoices.length, 0);
-  const totalSubtotal = groups.reduce((acc, group) => acc + group.totalSubtotal, 0);
-  const totalIva = groups.reduce((acc, group) => acc + group.totalIva, 0);
-  const totalAmount = groups.reduce((acc, group) => acc + group.totalAmount, 0);
-  const totalDebt = groups.reduce((acc, group) => acc + group.totalDebt, 0);
-  const maxMoraDays = groups.reduce(
-    (maxDays, group) => Math.max(maxDays, ...group.invoices.map(getInvoiceMoraDaysFromInvoiceDate)),
+const PortfolioSummary: React.FC<Props> = ({
+  groups,
+  selectedInvoiceIds,
+  onToggleInvoice,
+  onToggleClientInvoices,
+  showOnlySelected,
+  onShowOnlySelectedChange,
+}) => {
+  const selectedInvoiceIdSet = new Set(selectedInvoiceIds);
+  const selectedInvoices = groups.flatMap((group) => group.invoices).filter((invoice) => selectedInvoiceIdSet.has(invoice.id));
+  const totalInvoices = selectedInvoices.length;
+  const totalSubtotal = selectedInvoices.reduce((acc, invoice) => acc + Number(invoice.subtotal || 0), 0);
+  const totalIva = selectedInvoices.reduce((acc, invoice) => acc + Number(invoice.iva || 0), 0);
+  // El saldo es el valor exigible hoy: ya descuenta los abonos conciliados.
+  const totalAmount = selectedInvoices.reduce((acc, invoice) => acc + Number(invoice.debtValue || 0), 0);
+  const totalDebt = selectedInvoices.reduce((acc, invoice) => acc + Number(invoice.debtValue || 0), 0);
+  const maxMoraDays = selectedInvoices.reduce(
+    (maxDays, invoice) => Math.max(maxDays, getInvoiceMoraDaysFromDueDate(invoice)),
     0
   );
 
@@ -94,23 +108,47 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
     );
   }
 
+  const visibleGroups = showOnlySelected
+    ? groups
+      .map((group) => ({ ...group, invoices: group.invoices.filter((invoice) => selectedInvoiceIdSet.has(invoice.id)) }))
+      .filter((group) => group.invoices.length > 0)
+    : groups;
+
   return (
     <div className="space-y-6">
+      <div className="flex flex-col gap-3 rounded-[1.4rem] border border-blue-100 bg-blue-50 px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-black text-slate-900">Reporte para cliente</p>
+          <p className="mt-1 text-xs font-medium text-slate-600">
+            {totalInvoices === 0
+              ? 'Seleccione las facturas que desea incluir.'
+              : `${totalInvoices} factura${totalInvoices === 1 ? '' : 's'} seleccionada${totalInvoices === 1 ? '' : 's'} para reportar.`}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onShowOnlySelectedChange(!showOnlySelected)}
+          disabled={totalInvoices === 0 && !showOnlySelected}
+          className="rounded-xl bg-blue-600 px-4 py-3 text-[10px] font-black uppercase tracking-wide text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          {showOnlySelected ? 'Modificar selección' : 'Ver solo seleccionadas'}
+        </button>
+      </div>
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
           <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Clientes</p>
           <p className="mt-3 text-[30px] leading-none font-black text-slate-900">{groups.length}</p>
         </article>
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Facturas Pendientes</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Facturas Seleccionadas</p>
           <p className="mt-3 text-[30px] leading-none font-black text-slate-900">{totalInvoices}</p>
         </article>
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Subtotal Pendiente</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Subtotal a Reportar</p>
           <p className="mt-3 text-[30px] leading-none font-black text-slate-900">{formatCurrency(totalSubtotal)}</p>
         </article>
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
-          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Valor Factura</p>
+          <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Saldo a Reportar</p>
           <p className="mt-3 text-[30px] leading-none font-black text-red-600">{formatCurrency(totalAmount)}</p>
         </article>
         <article className="rounded-[1.4rem] border border-slate-200 bg-white px-6 py-5 shadow-sm">
@@ -119,8 +157,14 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
         </article>
       </section>
 
-      {groups.map((group) => {
-        const groupMaxMoraDays = Math.max(...group.invoices.map(getInvoiceMoraDaysFromInvoiceDate), 0);
+      {visibleGroups.map((group) => {
+        const groupInvoiceIds = group.invoices.map((invoice) => invoice.id);
+        const selectedInGroup = groupInvoiceIds.filter((id) => selectedInvoiceIdSet.has(id)).length;
+        const selectedGroupInvoices = group.invoices.filter((invoice) => selectedInvoiceIdSet.has(invoice.id));
+        const groupMaxMoraDays = Math.max(...selectedGroupInvoices.map(getInvoiceMoraDaysFromDueDate), 0);
+        const selectedGroupSubtotal = selectedGroupInvoices.reduce((acc, invoice) => acc + Number(invoice.subtotal || 0), 0);
+        const selectedGroupIva = selectedGroupInvoices.reduce((acc, invoice) => acc + Number(invoice.iva || 0), 0);
+        const selectedGroupAmount = selectedGroupInvoices.reduce((acc, invoice) => acc + Number(invoice.debtValue || 0), 0);
 
         return (
         <section key={group.clientName} className="overflow-hidden rounded-[1.6rem] border border-slate-200 bg-white shadow-sm">
@@ -133,20 +177,28 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                 <div>
                   <p className="text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Cliente</p>
                   <h3 className="mt-2 text-lg font-black uppercase leading-snug text-slate-900">{group.clientName}</h3>
+                  <button
+                    type="button"
+                    onClick={() => onToggleClientInvoices(groupInvoiceIds)}
+                    className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wide text-slate-600 transition-colors hover:bg-slate-100"
+                  >
+                    {selectedInGroup === groupInvoiceIds.length ? <CheckSquare size={15} className="text-blue-600" /> : <Square size={15} />}
+                    {selectedInGroup === groupInvoiceIds.length ? 'Quitar todas' : 'Seleccionar todas'}
+                  </button>
                 </div>
               </div>
               <div className="flex flex-wrap gap-3">
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Facturas</p>
-                  <p className="mt-2 text-xl font-black text-slate-900">{group.invoices.length}</p>
+                  <p className="mt-2 text-xl font-black text-slate-900">{selectedInGroup} / {group.invoices.length}</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
                   <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Mayor Mora</p>
                   <p className="mt-2 text-xl font-black text-amber-600">{groupMaxMoraDays} d</p>
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3">
-                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Valor Factura</p>
-                  <p className="mt-2 text-xl font-black text-red-600">{formatCurrency(group.totalAmount)}</p>
+                  <p className="text-[10px] font-black uppercase tracking-[0.18em] text-slate-500">Saldo Pendiente</p>
+                  <p className="mt-2 text-xl font-black text-red-600">{formatCurrency(selectedGroupAmount)}</p>
                 </div>
               </div>
             </div>
@@ -156,21 +208,34 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
             <table className="min-w-full divide-y divide-slate-200">
               <thead className="bg-white">
                 <tr className="text-left">
+                  <th className="px-6 py-4 text-center text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Reportar</th>
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Factura</th>
                   <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Descripción</th>
-                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Fecha Factura</th>
+                  <th className="px-6 py-4 text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Fecha Vencimiento</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Dias Mora</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Subtotal</th>
                   <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">IVA</th>
-                  <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Valor Factura</th>
+                  <th className="px-6 py-4 text-right text-[10px] font-black uppercase tracking-[0.22em] text-slate-500">Saldo Pendiente</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {group.invoices.map((invoice) => {
-                  const invoiceMoraDays = getInvoiceMoraDaysFromInvoiceDate(invoice);
+                  const invoiceMoraDays = getInvoiceMoraDaysFromDueDate(invoice);
+                  const isSelected = selectedInvoiceIdSet.has(invoice.id);
 
                   return (
                   <tr key={invoice.id} className="align-top">
+                    <td className="px-6 py-5 text-center">
+                      <button
+                        type="button"
+                        onClick={() => onToggleInvoice(invoice.id)}
+                        aria-label={`${isSelected ? 'Quitar' : 'Incluir'} factura ${invoice.invoiceNumber} del reporte`}
+                        title={isSelected ? 'Quitar del reporte' : 'Incluir en el reporte'}
+                        className="rounded-lg p-1 text-slate-400 transition-colors hover:bg-slate-100 hover:text-blue-600"
+                      >
+                        {isSelected ? <CheckSquare size={20} className="text-blue-600" /> : <Square size={20} />}
+                      </button>
+                    </td>
                     <td className="px-6 py-5">
                       <div className="flex items-start gap-3">
                         <div className="rounded-xl bg-slate-50 p-2 text-slate-500 border border-slate-200">
@@ -190,25 +255,25 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
                         <p className="max-w-md whitespace-pre-wrap text-sm leading-6 text-slate-700">{invoice.description || '-'}</p>
                       </div>
                     </td>
-                    <td className="px-6 py-5 text-sm font-bold text-slate-700">{formatDate(invoice.date)}</td>
+                    <td className="px-6 py-5 text-sm font-bold text-slate-700">{formatDate(invoice.dueDate)}</td>
                     <td className={`px-6 py-5 text-right text-sm font-black ${invoiceMoraDays > 0 ? 'text-amber-600' : 'text-slate-500'}`}>
                       {invoiceMoraDays} d
                     </td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.subtotal)}</td>
                     <td className="px-6 py-5 text-right text-sm font-bold text-slate-700">{formatCurrency(invoice.iva)}</td>
-                    <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(getInvoiceFaceValue(invoice))}</td>
+                    <td className="px-6 py-5 text-right text-sm font-black text-slate-900">{formatCurrency(invoice.debtValue)}</td>
                   </tr>
                   );
                 })}
               </tbody>
               <tfoot className="bg-slate-50">
                 <tr>
-                  <td className="px-6 py-4 text-sm font-black text-slate-500 uppercase" colSpan={4}>
-                    Recuento {group.invoices.length}
+                  <td className="px-6 py-4 text-sm font-black text-slate-500 uppercase" colSpan={5}>
+                    Seleccionadas {selectedInGroup} de {group.invoices.length}
                   </td>
-                  <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(group.totalSubtotal)}</td>
-                  <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(group.totalIva)}</td>
-                  <td className="px-6 py-4 text-right text-sm font-black text-slate-900">{formatCurrency(group.totalAmount)}</td>
+                  <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(selectedGroupSubtotal)}</td>
+                  <td className="px-6 py-4 text-right text-sm font-black text-slate-700">{formatCurrency(selectedGroupIva)}</td>
+                  <td className="px-6 py-4 text-right text-sm font-black text-slate-900">{formatCurrency(selectedGroupAmount)}</td>
                 </tr>
               </tfoot>
             </table>
@@ -224,7 +289,7 @@ const PortfolioSummary: React.FC<Props> = ({ groups }) => {
             <p className="mt-2 text-2xl font-black">{formatCurrency(totalAmount)}</p>
           </div>
           <div className="flex flex-wrap gap-6 text-sm font-bold text-slate-200">
-            <span>Facturas: {totalInvoices}</span>
+            <span>Facturas a reportar: {totalInvoices}</span>
             <span>Mayor mora: {maxMoraDays} d</span>
             <span>Subtotal: {formatCurrency(totalSubtotal)}</span>
             <span>IVA: {formatCurrency(totalIva)}</span>

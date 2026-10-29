@@ -9,6 +9,7 @@ import {
   Landmark,
   Calendar,
   User as UserIcon,
+  Repeat2,
   X,
   CloudCheck,
   CheckCircle2,
@@ -26,8 +27,7 @@ import { siigoService } from './services/siigoService';
 import { runAIAudit, parseCSVWithAI, auditSiigoMapping } from './services/geminiService';
 import { supabaseService } from './services/supabaseService';
 import { parseCarteraCsv } from './services/csvImportService';
-import { formatDecimalValue } from './utils/formatters';
-import { getInvoiceFaceValue } from './utils/invoiceAmounts';
+import { calculateAccumulatedPortfolio, getPeriodEndDate } from './utils/accumulatedPortfolio';
 
 const CURRENT_USER_STORAGE_KEY = 'cartera_current_user';
 const DELETED_INVOICES_STORAGE_KEY = 'cartera_deleted_invoice_numbers';
@@ -82,6 +82,11 @@ const isUsableClientName = (value?: string) => {
 
 const hasMeaningfulDate = (value?: string) => Boolean(String(value || '').trim());
 
+const isFromPreviousYear = (invoice: Partial<Invoice>, referenceYear = new Date().getFullYear()) => {
+  const match = String(invoice.date || invoice.dueDate || '').match(/^(\d{4})/);
+  return Boolean(match && Number(match[1]) < referenceYear);
+};
+
 const hasMeaningfulDescription = (value?: string) => {
   const text = String(value || '').trim();
   if (!text) return false;
@@ -125,6 +130,15 @@ const normalizeStatusKey = (value?: string) => {
 };
 
 const isNoteCreditStatus = (value?: string) => normalizeStatusKey(value) === NOTE_CREDIT_STATUS;
+
+// Una conciliación es un registro contable definitivo: no debe ser reemplazado
+// por una importación ni modificado/eliminado desde la cartera.
+const isReconciledInvoice = (invoice: Partial<Invoice>) =>
+  Number(invoice.paidAmount || 0) > 0 ||
+  Number(invoice.creditAmount || 0) > 0 ||
+  Boolean(invoice.paymentDate) ||
+  Boolean(invoice.creditDate) ||
+  normalizeStatusKey(invoice.status) === 'Pagada';
 
 const normalizeDigits = (value?: string) =>
   String(value || '').replace(/[^\d]/g, '').trim();
@@ -181,6 +195,12 @@ const getClientDisplayName = (invoice: Invoice) => {
     return 'CLIENTE NO IDENTIFICADO';
   }
   return clientName;
+};
+
+const getClientKey = (invoice: Invoice) => {
+  const documentNumber = normalizeDigits(invoice.documentNumber);
+  if (documentNumber) return `doc:${documentNumber}`;
+  return `name:${normalizeSearchText(invoice.clientName)}`;
 };
 
 const MONTH_LABELS: Record<string, string> = {
@@ -316,15 +336,110 @@ const setStoredBankTransactions = (username: string | undefined, transactions: B
   window.localStorage.setItem(getBankTransactionsStorageKey(username), JSON.stringify(transactions));
 };
 
-const escapeCsvValue = (value: unknown) => {
-  const text = String(value ?? '');
-  if (/[;"\n\r]/.test(text)) {
-    return `"${text.replace(/"/g, '""')}"`;
-  }
-  return text;
+const escapeExcelXmlValue = (value: unknown) =>
+  String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+
+const excelStringCell = (value: unknown, styleId = 'Text') =>
+  `<Cell ss:StyleID="${styleId}"><Data ss:Type="String">${escapeExcelXmlValue(value)}</Data></Cell>`;
+
+const excelNumberCell = (value: unknown, styleId = 'Number') => {
+  const numericValue = Number(value || 0);
+  return `<Cell ss:StyleID="${styleId}"><Data ss:Type="Number">${Number.isFinite(numericValue) ? numericValue : 0}</Data></Cell>`;
 };
 
-const formatCsvAmount = (value: unknown) => formatDecimalValue(Number(value || 0));
+const excelDateCell = (value: unknown) => {
+  const text = String(value || '').trim();
+  if (!text) return excelStringCell('');
+  return excelStringCell(text, 'DateText');
+};
+
+const excelRow = (cells: string[], styleId?: string) =>
+  `<Row${styleId ? ` ss:StyleID="${styleId}"` : ''}>${cells.join('')}</Row>`;
+
+const buildExcelWorksheet = (name: string, columnWidths: number[], rows: string[]) => `
+  <Worksheet ss:Name="${escapeExcelXmlValue(name)}">
+    <Table>
+      ${columnWidths.map((width) => `<Column ss:AutoFitWidth="0" ss:Width="${width}"/>`).join('')}
+      ${rows.join('')}
+    </Table>
+    <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+      <FreezePanes/>
+      <FrozenNoSplit/>
+      <SplitHorizontal>1</SplitHorizontal>
+      <TopRowBottomPane>1</TopRowBottomPane>
+      <ActivePane>2</ActivePane>
+    </WorksheetOptions>
+  </Worksheet>`;
+
+const downloadExcelWorkbook = (filename: string, worksheets: string[]) => {
+  const workbook = `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+  <Styles>
+    <Style ss:ID="Title">
+      <Font ss:Bold="1" ss:Size="16" ss:Color="#FFFFFF"/>
+      <Interior ss:Color="#0F172A" ss:Pattern="Solid"/>
+      <Alignment ss:Vertical="Center"/>
+    </Style>
+    <Style ss:ID="Subtitle">
+      <Font ss:Bold="1" ss:Color="#1E293B"/>
+      <Interior ss:Color="#DBEAFE" ss:Pattern="Solid"/>
+    </Style>
+    <Style ss:ID="Header">
+      <Font ss:Bold="1" ss:Color="#FFFFFF"/>
+      <Interior ss:Color="#2563EB" ss:Pattern="Solid"/>
+      <Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/>
+      <Borders>
+        <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1" ss:Color="#1D4ED8"/>
+      </Borders>
+    </Style>
+    <Style ss:ID="Text">
+      <Alignment ss:Vertical="Top" ss:WrapText="1"/>
+    </Style>
+    <Style ss:ID="DateText">
+      <Alignment ss:Horizontal="Center" ss:Vertical="Top"/>
+    </Style>
+    <Style ss:ID="Number">
+      <NumberFormat ss:Format="#,##0"/>
+      <Alignment ss:Horizontal="Right" ss:Vertical="Top"/>
+    </Style>
+    <Style ss:ID="Money">
+      <NumberFormat ss:Format="$ #,##0"/>
+      <Alignment ss:Horizontal="Right" ss:Vertical="Top"/>
+    </Style>
+    <Style ss:ID="TotalMoney">
+      <Font ss:Bold="1"/>
+      <Interior ss:Color="#E0F2FE" ss:Pattern="Solid"/>
+      <NumberFormat ss:Format="$ #,##0"/>
+      <Alignment ss:Horizontal="Right"/>
+    </Style>
+    <Style ss:ID="TotalLabel">
+      <Font ss:Bold="1"/>
+      <Interior ss:Color="#E0F2FE" ss:Pattern="Solid"/>
+    </Style>
+  </Styles>
+  ${worksheets.join('')}
+</Workbook>`;
+
+  const blob = new Blob([workbook], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.URL.revokeObjectURL(url);
+};
 
 const App: React.FC = () => {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
@@ -335,6 +450,7 @@ const App: React.FC = () => {
   const [isPeriodFilterOpen, setIsPeriodFilterOpen] = useState(false);
   const [selectedClients, setSelectedClients] = useState<string[]>([]);
   const [isClientFilterOpen, setIsClientFilterOpen] = useState(false);
+  const [showOnlyRecurringClients, setShowOnlyRecurringClients] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [activeView, setActiveView] = useState<'cartera' | 'conciliacion' | 'resumen'>('cartera');
   const [auditFindings] = useState<AIAuditFinding[]>([]);
@@ -344,6 +460,8 @@ const App: React.FC = () => {
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
+  const [selectedReportInvoiceIds, setSelectedReportInvoiceIds] = useState<string[]>([]);
+  const [showOnlySelectedReportInvoices, setShowOnlySelectedReportInvoices] = useState(false);
   const [cloudStatus, setCloudStatus] = useState<'connected' | 'syncing' | 'error'>('connected');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<AppUser | null>(() => getStoredUser());
@@ -420,6 +538,21 @@ const App: React.FC = () => {
     setErrorMessage(null);
   };
 
+  const toggleReportInvoice = useCallback((invoiceId: string) => {
+    setSelectedReportInvoiceIds((current) =>
+      current.includes(invoiceId) ? current.filter((id) => id !== invoiceId) : [...current, invoiceId]
+    );
+  }, []);
+
+  const toggleClientReportInvoices = useCallback((invoiceIds: string[]) => {
+    setSelectedReportInvoiceIds((current) => {
+      const allSelected = invoiceIds.every((id) => current.includes(id));
+      return allSelected
+        ? current.filter((id) => !invoiceIds.includes(id))
+        : Array.from(new Set([...current, ...invoiceIds]));
+    });
+  }, []);
+
   const handleLogout = () => {
     window.localStorage.removeItem(CURRENT_USER_STORAGE_KEY);
     setCurrentUser(null);
@@ -430,6 +563,7 @@ const App: React.FC = () => {
     setIsPeriodFilterOpen(false);
     setSelectedClients([]);
     setIsClientFilterOpen(false);
+    setShowOnlyRecurringClients(false);
     setSelectedStatus('all');
     setActiveView('cartera');
     setEditingInvoice(null);
@@ -479,6 +613,35 @@ const App: React.FC = () => {
       .map((inv) => inv.clientName)
       .filter((client): client is string => Boolean(client));
     return Array.from(new Set<string>(clients)).sort((a, b) => a.localeCompare(b, 'es-CO'));
+  }, [invoices]);
+
+  // Un cliente es recurrente mensual cuando aparece facturado en dos meses
+  // consecutivos. La regla usa todo el historial, no solo el período filtrado.
+  const recurringClientKeys = useMemo(() => {
+    const periodsByClient = new Map<string, Set<string>>();
+
+    invoices.forEach((invoice) => {
+      const period = getPeriodFromDate(invoice.date);
+      const clientKey = getClientKey(invoice);
+      if (!period || clientKey === 'name:') return;
+      const periods = periodsByClient.get(clientKey) || new Set<string>();
+      periods.add(period);
+      periodsByClient.set(clientKey, periods);
+    });
+
+    return new Set(
+      Array.from(periodsByClient.entries())
+        .filter(([, periods]) => {
+          const months = Array.from(periods).sort();
+          return months.some((period, index) => {
+            if (index === 0) return false;
+            const [year, month] = period.split('-').map(Number);
+            const [previousYear, previousMonth] = months[index - 1].split('-').map(Number);
+            return year * 12 + month === previousYear * 12 + previousMonth + 1;
+          });
+        })
+        .map(([clientKey]) => clientKey)
+    );
   }, [invoices]);
 
   const selectedClientLabel = selectedClients.length === 0
@@ -552,47 +715,29 @@ const App: React.FC = () => {
 
       if (siigoInvoices && siigoInvoices.length > 0) {
         const auditedInvoices = (await auditSiigoMapping(siigoInvoices, raw)).filter(
-          (invoice) => !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber))
+          (invoice) =>
+            !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber)) &&
+            !isFromPreviousYear(invoice) &&
+            !isNoteCreditStatus(invoice.status)
         );
-        const invoicesToSync = auditedInvoices.map((invoice) => {
-          const currentInvoice = byInvoiceNumber.get(normalizeInvoiceNumberKey(invoice.invoiceNumber));
-          if (!currentInvoice) return invoice;
-          const currentIsPlaceholder = isPlaceholderInvoice(currentInvoice);
-          const keepCurrentFinancials =
-            !currentIsPlaceholder &&
-            hasMeaningfulFinancialValues(currentInvoice) &&
-            !hasMeaningfulFinancialValues(invoice);
-          const currentIsNoteCredit = isNoteCreditStatus(currentInvoice.status);
-          return {
-            ...currentInvoice,
-            ...invoice,
-            id: currentInvoice.id,
-            clientName: isUsableClientName(invoice.clientName) ? invoice.clientName : currentInvoice.clientName,
-            documentType: invoice.documentType || currentInvoice.documentType,
-            documentNumber: invoice.documentNumber || currentInvoice.documentNumber,
-            description: currentIsPlaceholder || hasMeaningfulDescription(invoice.description) ? invoice.description : currentInvoice.description,
-            date: currentIsPlaceholder || hasMeaningfulDate(invoice.date) ? invoice.date : currentInvoice.date,
-            dueDate: currentIsPlaceholder || hasMeaningfulDate(invoice.dueDate) ? invoice.dueDate : currentInvoice.dueDate,
-            subtotal: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.subtotal : invoice.subtotal,
-            iva: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.iva : invoice.iva,
-            total: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.total : invoice.total,
-            debtValue: keepCurrentFinancials || currentIsNoteCredit ? currentInvoice.debtValue : invoice.debtValue,
-            paidAmount: currentInvoice.paidAmount,
-            creditAmount: currentInvoice.creditAmount,
-            paymentDate: currentInvoice.paymentDate,
-            creditDate: currentInvoice.creditDate,
-            status: currentIsNoteCredit ? currentInvoice.status : (invoice.status || currentInvoice.status),
-            observations: currentInvoice.observations || '',
-            documentUrl: currentInvoice.documentUrl,
-            isSynced: currentInvoice.isSynced,
-          };
+        const invoicesToSync = auditedInvoices.filter((invoice) => {
+          const invoiceNumber = normalizeInvoiceNumberKey(invoice.invoiceNumber);
+          return invoiceNumber && !byInvoiceNumber.has(invoiceNumber);
         });
 
-        await supabaseService.syncInvoices(invoicesToSync);
-        const updatedMaster = (await supabaseService.fetchInvoices()).filter(
-          (invoice) => !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber))
-        );
-        setInvoices(updatedMaster);
+        if (invoicesToSync.length > 0) {
+          await supabaseService.syncInvoices(invoicesToSync);
+          const updatedMaster = (await supabaseService.fetchInvoices()).filter(
+            (invoice) => !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber))
+          );
+          setInvoices(updatedMaster);
+        } else {
+          setInvoices(
+            currentMaster.filter(
+              (invoice) => !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber))
+            )
+          );
+        }
       }
       setCloudStatus('connected');
     } catch (err: any) {
@@ -629,6 +774,10 @@ const App: React.FC = () => {
           );
           const invoicesToSync = importedInvoices
             .filter((invoice) => !deletedInvoiceNumbersSet.has(normalizeInvoiceNumberKey(invoice.invoiceNumber)))
+            .filter((invoice) => {
+              const currentInvoice = byInvoiceNumber.get(normalizeInvoiceNumberKey(invoice.invoiceNumber));
+              return !currentInvoice || !isReconciledInvoice(currentInvoice);
+            })
             .map((invoice) => {
             const currentInvoice = byInvoiceNumber.get(normalizeInvoiceNumberKey(invoice.invoiceNumber));
             if (!currentInvoice) return invoice;
@@ -712,6 +861,15 @@ const App: React.FC = () => {
   const handleReconciliationPayments = async (paidInvoices: Invoice[]) => {
     if (!requireAdminAccess() || paidInvoices.length === 0) return;
 
+    const protectedInvoice = paidInvoices.find((invoice) => {
+      const currentInvoice = invoices.find((item) => item.id === invoice.id ||
+        normalizeInvoiceNumberKey(item.invoiceNumber) === normalizeInvoiceNumberKey(invoice.invoiceNumber));
+      return currentInvoice && isReconciledInvoice(currentInvoice);
+    });
+    if (protectedInvoice) {
+      throw new Error(`La factura ${protectedInvoice.invoiceNumber} ya está conciliada y no puede volver a modificarse.`);
+    }
+
     setCloudStatus('syncing');
     setErrorMessage(null);
 
@@ -736,8 +894,13 @@ const App: React.FC = () => {
   const handleDeleteInvoice = async (invoice: Invoice) => {
     if (!requireAdminAccess()) return;
 
+    // Las facturas históricas se pueden depurar aunque conserven pagos importados.
+    if (isReconciledInvoice(invoice) && !isFromPreviousYear(invoice)) {
+      setErrorMessage(`La factura ${invoice.invoiceNumber} está conciliada y protegida; no se puede eliminar.`);
+      return;
+    }
     const confirmed = window.confirm(
-      `Se eliminara la factura ${invoice.invoiceNumber}. Esta accion no se puede deshacer.`
+      `Se eliminará la factura ${invoice.invoiceNumber}. Esta acción no se puede deshacer.`
     );
     if (!confirmed) return;
 
@@ -781,69 +944,124 @@ const App: React.FC = () => {
   };
 
   const handleExportReport = () => {
-    const rows = filteredInvoices.map((invoice) => ({
-      cliente: invoice.clientName || '',
-      tipo_documento: invoice.documentType || '',
-      nit_cc: invoice.documentNumber || '',
-      factura: invoice.invoiceNumber || '',
-      fecha_emision: invoice.date || '',
-      fecha_vencimiento: invoice.dueDate || '',
-      descripcion: invoice.description || '',
-      subtotal: formatCsvAmount(invoice.subtotal),
-      iva: formatCsvAmount(invoice.iva),
-      total: formatCsvAmount(invoice.total),
-      rete_fuente: formatCsvAmount(invoice.reteFuente),
-      rete_iva: formatCsvAmount(invoice.reteIva),
-      rete_ica: formatCsvAmount(invoice.reteIca),
-      estado: invoice.status || '',
-      deuda: formatCsvAmount(invoice.debtValue),
-      fecha_pago: invoice.paymentDate || '',
-      valor_recaudado: formatCsvAmount(invoice.paidAmount),
-      fecha_abono: invoice.creditDate || '',
-      valor_abono: formatCsvAmount(invoice.creditAmount),
-      observaciones: invoice.observations || '',
-      mora_dias: Number(invoice.moraDays || 0),
-    }));
+    const selectedReportInvoiceIdSet = new Set(selectedReportInvoiceIds);
+    const invoicesToExport = activeView === 'resumen'
+      ? filteredInvoices.filter((invoice) => selectedReportInvoiceIdSet.has(invoice.id))
+      : filteredInvoices;
 
-    const headers = Object.keys(rows[0] || {
-      cliente: '',
-      tipo_documento: '',
-      nit_cc: '',
-      factura: '',
-      fecha_emision: '',
-      fecha_vencimiento: '',
-      descripcion: '',
-      subtotal: '',
-      iva: '',
-      total: '',
-      rete_fuente: '',
-      rete_iva: '',
-      rete_ica: '',
-      estado: '',
-      deuda: '',
-      fecha_pago: '',
-      valor_recaudado: '',
-      fecha_abono: '',
-      valor_abono: '',
-      observaciones: '',
-      mora_dias: '',
-    });
+    if (activeView === 'resumen' && invoicesToExport.length === 0) {
+      setErrorMessage('Seleccione al menos una factura en el resumen antes de exportar el reporte.');
+      return;
+    }
 
-    const csvContent = [
-      headers.join(';'),
-      ...rows.map((row) => headers.map((header) => escapeCsvValue((row as Record<string, unknown>)[header])).join(';')),
-    ].join('\r\n');
-
-    const blob = new Blob([`\uFEFF${csvContent}`], { type: 'text/csv;charset=utf-8;' });
-    const url = window.URL.createObjectURL(blob);
-    const link = document.createElement('a');
+    const exportTotal = (field: keyof Invoice) => invoicesToExport.reduce((total, invoice) => total + Number(invoice[field] || 0), 0);
+    const exportCollected = invoicesToExport.reduce((total, invoice) =>
+      total + (invoice.status === 'Pagada' ? Number(invoice.paidAmount || invoice.total || 0) : Number(invoice.paidAmount || 0)) + Number(invoice.creditAmount || 0), 0);
+    const exportPending = exportTotal('debtValue');
     const dateSuffix = new Date().toISOString().split('T')[0];
-    link.href = url;
-    link.download = `cartera_${dateSuffix}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+    const generatedAt = new Date().toLocaleString('es-CO');
+    const selectedStatusLabel = selectedStatus === 'all' ? 'Todos' : selectedStatus;
+    const selectedPeriodsLabel = selectedPeriods.length ? selectedPeriods.join(', ') : 'Todos';
+    const selectedClientsLabel = selectedClients.length ? selectedClients.join(', ') : 'Todos';
+    const searchLabel = searchTerm.trim() || 'Sin busqueda';
+
+    const summaryRows = [
+      excelRow([`<Cell ss:MergeAcross="3" ss:StyleID="Title"><Data ss:Type="String">Reporte de cartera</Data></Cell>`]),
+      excelRow([excelStringCell('Generado', 'Subtitle'), excelStringCell(generatedAt), excelStringCell('Registros exportados', 'Subtitle'), excelNumberCell(invoicesToExport.length)]),
+      excelRow([excelStringCell('Periodo', 'Subtitle'), excelStringCell(selectedPeriodsLabel), excelStringCell('Estado', 'Subtitle'), excelStringCell(selectedStatusLabel)]),
+      excelRow([excelStringCell('Cliente', 'Subtitle'), excelStringCell(selectedClientsLabel), excelStringCell('Busqueda', 'Subtitle'), excelStringCell(searchLabel)]),
+      excelRow([excelStringCell('')]),
+      excelRow([excelStringCell('Indicador', 'Header'), excelStringCell('Valor', 'Header')]),
+      excelRow([excelStringCell('Facturas'), excelNumberCell(invoicesToExport.length)]),
+      excelRow([excelStringCell('Total facturado'), excelNumberCell(exportTotal('total'), 'Money')]),
+      excelRow([excelStringCell('IVA'), excelNumberCell(exportTotal('iva'), 'Money')]),
+      excelRow([excelStringCell('Rete IVA'), excelNumberCell(exportTotal('reteIva'), 'Money')]),
+      excelRow([excelStringCell('Total recaudado'), excelNumberCell(exportCollected, 'Money')]),
+      excelRow([excelStringCell('Total pendiente'), excelNumberCell(exportPending, 'Money')]),
+      excelRow([excelStringCell('Total vencido'), excelNumberCell(invoicesToExport.filter((invoice) => Number(invoice.moraDays || 0) > 0).reduce((total, invoice) => total + Number(invoice.debtValue || 0), 0), 'Money')]),
+    ];
+
+    const detailColumns = [
+      'Cliente',
+      'Tipo documento',
+      'NIT/CC',
+      'Factura',
+      'Fecha emision',
+      'Fecha vencimiento',
+      'Descripcion',
+      'Subtotal',
+      'IVA',
+      'Total',
+      'Rete fuente',
+      'Rete IVA',
+      'Rete ICA',
+      'Estado',
+      'Deuda',
+      'Fecha pago',
+      'Valor recaudado',
+      'Fecha abono',
+      'Valor abono',
+      'Dias mora',
+      'Observaciones',
+    ];
+
+    const detailRows = [
+      excelRow(detailColumns.map((column) => excelStringCell(column, 'Header'))),
+      ...invoicesToExport.map((invoice) =>
+        excelRow([
+          excelStringCell(invoice.clientName),
+          excelStringCell(invoice.documentType),
+          excelStringCell(invoice.documentNumber),
+          excelStringCell(invoice.invoiceNumber),
+          excelDateCell(invoice.date),
+          excelDateCell(invoice.dueDate),
+          excelStringCell(invoice.description),
+          excelNumberCell(invoice.subtotal, 'Money'),
+          excelNumberCell(invoice.iva, 'Money'),
+          excelNumberCell(invoice.total, 'Money'),
+          excelNumberCell(invoice.reteFuente, 'Money'),
+          excelNumberCell(invoice.reteIva, 'Money'),
+          excelNumberCell(invoice.reteIca, 'Money'),
+          excelStringCell(invoice.status),
+          excelNumberCell(invoice.debtValue, 'Money'),
+          excelDateCell(invoice.paymentDate),
+          excelNumberCell(invoice.paidAmount, 'Money'),
+          excelDateCell(invoice.creditDate),
+          excelNumberCell(invoice.creditAmount, 'Money'),
+          excelNumberCell(invoice.moraDays, 'Number'),
+          excelStringCell(invoice.observations),
+        ])
+      ),
+      excelRow([
+        excelStringCell('Totales', 'TotalLabel'),
+        ...Array.from({ length: 6 }, () => excelStringCell('', 'TotalLabel')),
+        excelNumberCell(exportTotal('subtotal'), 'TotalMoney'),
+        excelNumberCell(exportTotal('iva'), 'TotalMoney'),
+        excelNumberCell(exportTotal('total'), 'TotalMoney'),
+        excelNumberCell(exportTotal('reteFuente'), 'TotalMoney'),
+        excelNumberCell(exportTotal('reteIva'), 'TotalMoney'),
+        excelNumberCell(exportTotal('reteIca'), 'TotalMoney'),
+        excelStringCell('', 'TotalLabel'),
+        excelNumberCell(exportPending, 'TotalMoney'),
+        excelStringCell('', 'TotalLabel'),
+        excelNumberCell(exportCollected, 'TotalMoney'),
+        excelStringCell('', 'TotalLabel'),
+        excelNumberCell(exportTotal('creditAmount'), 'TotalMoney'),
+        excelStringCell('', 'TotalLabel'),
+        excelStringCell('', 'TotalLabel'),
+      ]),
+    ];
+
+    const worksheets = [
+      buildExcelWorksheet('Resumen', [130, 180, 150, 220], summaryRows),
+      buildExcelWorksheet(
+        'Detalle',
+        [180, 95, 105, 105, 90, 95, 260, 95, 90, 105, 95, 95, 95, 120, 105, 95, 110, 95, 105, 75, 260],
+        detailRows
+      ),
+    ];
+
+    downloadExcelWorkbook(`reporte_cartera_${dateSuffix}.xls`, worksheets);
   };
 
   const filteredInvoices = useMemo(() => {
@@ -873,13 +1091,34 @@ const App: React.FC = () => {
         const invoicePeriod = getPeriodFromDate(inv.date);
         const matchesPeriod = selectedPeriods.length === 0 || selectedPeriods.includes(invoicePeriod);
         const matchesClient = selectedClients.length === 0 || selectedClients.includes(inv.clientName);
+        const matchesRecurring = !showOnlyRecurringClients || recurringClientKeys.has(getClientKey(inv));
         const matchesStatus =
           selectedStatus === 'all' ||
           normalizeStatusKey(inv.status) === normalizeStatusKey(selectedStatus);
-        return matchesSearch && matchesPeriod && matchesClient && matchesStatus;
+        return matchesSearch && matchesPeriod && matchesClient && matchesRecurring && matchesStatus;
       })
       .sort((a, b) => new Date(b.date || '1900-01-01').getTime() - new Date(a.date || '1900-01-01').getTime());
-  }, [invoices, searchTerm, selectedPeriods, selectedClients, selectedStatus]);
+  }, [invoices, searchTerm, selectedPeriods, selectedClients, showOnlyRecurringClients, recurringClientKeys, selectedStatus]);
+
+  const invoicesForAccumulatedPortfolio = useMemo(
+    () => invoices.filter((invoice) => {
+      const matchesSearch = invoiceMatchesSearchTerm(invoice, searchTerm);
+      const matchesClient = selectedClients.length === 0 || selectedClients.includes(invoice.clientName);
+      const matchesStatus =
+        selectedStatus === 'all' ||
+        normalizeStatusKey(invoice.status) === normalizeStatusKey(selectedStatus);
+      return matchesSearch && matchesClient && matchesStatus;
+    }),
+    [invoices, searchTerm, selectedClients, selectedStatus]
+  );
+
+  const accumulatedPortfolio = useMemo(() => {
+    const latestSelectedPeriod = [...selectedPeriods].sort().at(-1);
+    return calculateAccumulatedPortfolio(
+      invoicesForAccumulatedPortfolio,
+      latestSelectedPeriod ? getPeriodEndDate(latestSelectedPeriod) : null
+    );
+  }, [invoicesForAccumulatedPortfolio, selectedPeriods]);
 
   const stats: FinancialStats = useMemo(() => {
     const totalInvoices = filteredInvoices.length;
@@ -892,9 +1131,11 @@ const App: React.FC = () => {
       return acc + recaudo + abono;
     }, 0);
     const totalPending = filteredInvoices.reduce((acc, inv) => acc + (inv.debtValue || 0), 0);
-    const totalOverdue = filteredInvoices.filter((i) => i.moraDays && i.moraDays > 0).reduce((acc, inv) => acc + (inv.debtValue || 0), 0);
+    // La cartera acumulada debe conciliar con los indicadores superiores:
+    // facturación acumulada menos recaudo acumulado.
+    const totalOverdue = accumulatedPortfolio;
     return { totalInvoices, totalInvoiced, totalIva, totalReteIva, totalCollected, totalPending, totalOverdue, averageMoraDays: 0 };
-  }, [filteredInvoices]);
+  }, [filteredInvoices, accumulatedPortfolio]);
 
   const portfolioSummaryGroups = useMemo(() => {
     const pendingInvoices = filteredInvoices.filter(
@@ -924,7 +1165,7 @@ const App: React.FC = () => {
       currentGroup.invoices.push(invoice);
       currentGroup.totalSubtotal += Number(invoice.subtotal || 0);
       currentGroup.totalIva += Number(invoice.iva || 0);
-      currentGroup.totalAmount += getInvoiceFaceValue(invoice);
+      currentGroup.totalAmount += Number(invoice.debtValue || 0);
       currentGroup.totalDebt += Number(invoice.debtValue || 0);
       acc[clientName] = currentGroup;
       return acc;
@@ -1223,6 +1464,19 @@ const App: React.FC = () => {
             </div>
             <button
               type="button"
+              onClick={() => setShowOnlyRecurringClients((current) => !current)}
+              title="Clientes con facturas en meses consecutivos"
+              className={`border rounded-lg px-4 py-2 flex items-center gap-2 text-[10px] font-black uppercase transition-colors ${
+                showOnlyRecurringClients
+                  ? 'bg-violet-600 border-violet-600 text-white'
+                  : 'bg-violet-50 border-violet-100 text-violet-700 hover:bg-violet-100'
+              }`}
+            >
+              <Repeat2 size={13} />
+              <span>Recurrentes ({recurringClientKeys.size})</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setActiveView(activeView === 'resumen' ? 'cartera' : 'resumen')}
               className={`border rounded-lg px-4 py-2 flex items-center gap-2 text-[10px] font-black uppercase transition-colors ${
                 activeView === 'resumen'
@@ -1250,10 +1504,18 @@ const App: React.FC = () => {
                   onSelectInvoice={(inv) => setSelectedInvoiceId(inv.id)}
                   selectedInvoiceId={selectedInvoiceId}
                   canEdit={canModifyInvoices}
+                  isRecurringClient={(invoice) => recurringClientKeys.has(getClientKey(invoice))}
                 />
               </>
             ) : activeView === 'resumen' ? (
-              <PortfolioSummary groups={portfolioSummaryGroups} />
+              <PortfolioSummary
+                groups={portfolioSummaryGroups}
+                selectedInvoiceIds={selectedReportInvoiceIds}
+                onToggleInvoice={toggleReportInvoice}
+                onToggleClientInvoices={toggleClientReportInvoices}
+                showOnlySelected={showOnlySelectedReportInvoices}
+                onShowOnlySelectedChange={setShowOnlySelectedReportInvoices}
+              />
             ) : (
               <ReconciliationPanel
                 invoices={invoices}

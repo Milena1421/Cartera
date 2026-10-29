@@ -235,7 +235,14 @@ export const supabaseService = {
   },
 
   mergeDuplicateInvoices(base: Invoice, candidate: Invoice): Invoice {
-    const preferred = this.pickPreferredInvoice(base, candidate);
+    const baseIsNoteCredit = this.normalizeKey(base.status || '') === 'notacredito';
+    const candidateIsNoteCredit = this.normalizeKey(candidate.status || '') === 'notacredito';
+    // Si una referencia duplicada tiene una factura y una nota crédito, la
+    // factura conserva su saldo. Una nota no puede anular otra factura solo
+    // por compartir accidentalmente el mismo número.
+    const preferred = baseIsNoteCredit !== candidateIsNoteCredit
+      ? (baseIsNoteCredit ? candidate : base)
+      : this.pickPreferredInvoice(base, candidate);
     const fallback = preferred.id === base.id ? candidate : base;
 
     const pickText = (preferredValue?: string, fallbackValue?: string, validator?: (value?: string) => boolean) => {
@@ -262,7 +269,9 @@ export const supabaseService = {
 
     const preferredIsNoteCredit = this.normalizeKey(preferred.status || '') === 'notacredito';
     const fallbackIsNoteCredit = this.normalizeKey(fallback.status || '') === 'notacredito';
-    const noteCreditInvoice = preferredIsNoteCredit ? preferred : fallbackIsNoteCredit ? fallback : null;
+    const noteCreditInvoice = preferredIsNoteCredit && fallbackIsNoteCredit
+      ? (preferredIsNoteCredit ? preferred : fallback)
+      : null;
     const preferredStatus = this.normalizePaymentStatus(preferred.status);
     const fallbackStatus = this.normalizePaymentStatus(fallback.status);
     const preferredClearsPayment =
@@ -310,7 +319,7 @@ export const supabaseService = {
     const preferredDebtMatchesMerged = Math.abs(preferredDebt - mergedExpectedDebt) <= 2;
     const fallbackDebtMatchesMerged = Math.abs(fallbackDebt - mergedExpectedDebt) <= 2;
     const mergedDebtValue = (() => {
-      if (preferredIsNoteCredit || fallbackIsNoteCredit) return 0;
+      if (preferredIsNoteCredit && fallbackIsNoteCredit) return 0;
       if (preferredDebtMatchesMerged && !fallbackDebtMatchesMerged) return preferredDebt;
       if (fallbackDebtMatchesMerged && !preferredDebtMatchesMerged) return fallbackDebt;
       if (preferredDebtMatchesMerged && fallbackDebtMatchesMerged) {
@@ -358,7 +367,7 @@ export const supabaseService = {
       paidAmount: mergedPaidAmount,
       paidWithWithholdings: mergedPaidWithWithholdings,
       status:
-        preferredIsNoteCredit || fallbackIsNoteCredit
+        preferredIsNoteCredit && fallbackIsNoteCredit
           ? NOTE_CREDIT_STATUS
           : preferredClearsPayment && preferredClearsCredit
             ? 'Pendiente por pagar'
@@ -587,7 +596,8 @@ export const supabaseService = {
           bankCommission: Number(inv.bankCommission) || 0,
           status,
           debtValue,
-          observations: this.sanitizeObservation(inv.observations, inv),
+          // Preserve the text entered by a user; sanitation is for imported Siigo text.
+          observations: String(inv.observations || '').trim(),
           moraDays: Number(inv.moraDays) || 0,
           documentUrl: inv.documentUrl || null,
           isSynced: true,
@@ -623,24 +633,16 @@ export const supabaseService = {
         }
         throw new Error(`Error al guardar en Supabase: ${error.message}`);
       }
-      const observationSyncPayload = dataToSync
-        .map((invoice) => ({
-          invoiceNumber: this.normalizeInvoiceNumber(invoice.invoiceNumber),
-          observations: String(invoice.observations || ''),
-        }))
-        .filter((invoice) => invoice.invoiceNumber);
-
-      if (observationSyncPayload.length > 0) {
-        await Promise.all(
-          observationSyncPayload.map((invoice) =>
-            supabase
-              .from(TABLE_NAME)
-              .update({ observations: invoice.observations })
-              .eq('invoiceNumber', invoice.invoiceNumber)
-          )
-        );
+      // Save by row ID so duplicate or normalized invoice numbers cannot target another row.
+      const observationUpdates = await Promise.all(dataToSync.map((invoice) =>
+        supabase.from(TABLE_NAME)
+          .update({ observations: invoice.observations })
+          .eq('id', invoice.id)
+      ));
+      const observationError = observationUpdates.find((result) => result.error)?.error;
+      if (observationError) {
+        throw new Error(`No se pudieron guardar las observaciones: ${observationError.message}`);
       }
-
       const paymentSyncPayload = dataToSync
         .map((invoice) => ({
           invoiceNumber: this.normalizeInvoiceNumber(invoice.invoiceNumber),
@@ -730,10 +732,9 @@ export const supabaseService = {
 
         normalizedInvoice.total = getInvoiceFaceValue(normalizedInvoice);
 
-        normalizedInvoice.observations = this.sanitizeObservation(
-          this.getFirstDefined(row, ['observations', 'observation', 'observacion', 'observaciones']) as string,
-          normalizedInvoice
-        );
+        normalizedInvoice.observations = String(
+          this.getFirstDefined(row, ['observations', 'observation', 'observacion', 'observaciones']) || ''
+        ).trim();
 
         const looksLikeCsvPlaceholder =
           normalizedInvoice.total === 0 &&

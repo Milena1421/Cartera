@@ -46,14 +46,14 @@ const DashboardStats: React.FC<Props> = ({ stats }) => {
       format: 'currency'
     },
     { 
-      label: 'Pendiente', 
+      label: 'Cartera mes',
       value: stats.totalPending, 
       icon: <Clock className="w-5 h-5 text-amber-600" />,
       bg: 'bg-amber-50',
       format: 'currency'
     },
     { 
-      label: 'En Mora', 
+      label: 'Cartera acumulada',
       value: stats.totalOverdue, 
       icon: <TrendingDown className="w-5 h-5 text-red-600" />,
       bg: 'bg-red-50',

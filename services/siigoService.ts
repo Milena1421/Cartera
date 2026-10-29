@@ -269,21 +269,82 @@ export class SiigoService {
         page++;
       } while (page <= totalPages && page <= 3);
 
+      // El listado ya trae el estado de la factura. Evitamos consultar detalles
+      // adicionales de documentos que Siigo aún no ha enviado a la DIAN.
+      const invoicesToHydrate = allResults.filter((inv) => !this.isDianPendingToSend(inv));
       const hydratedResults: any[] = [];
-      for (const inv of allResults) {
+      for (const inv of invoicesToHydrate) {
         hydratedResults.push(await this.hydrateCustomerData(inv));
       }
 
-      const mapped = hydratedResults.map((inv) => {
+      // Las notas crédito, los comprobantes anulados y los documentos pendientes
+      // de envío a la DIAN no son cuentas por cobrar disponibles para sincronizar.
+      // Se excluyen antes de mapearlos para que nunca lleguen a la cartera.
+      const eligibleResults = hydratedResults.filter(
+        (inv) => !this.isCancelledOrCreditNote(inv) && !this.isDianPendingToSend(inv)
+      );
+      const mapped = eligibleResults.map((inv) => {
         const rawName = this.extractCustomerName(inv.customer);
         return this.mapToInternalInvoice(inv, rawName, inv.customer);
       });
 
-      return { invoices: mapped, raw: hydratedResults };
+      return { invoices: mapped, raw: eligibleResults };
     } catch (error) {
       console.error('Siigo getInvoices Error:', error);
       throw error;
     }
+  }
+
+  private isCancelledOrCreditNote(invoice: any): boolean {
+    if (invoice?.annulled === true || invoice?.canceled === true || invoice?.cancelled === true || invoice?.voided === true) {
+      return true;
+    }
+
+    const status = [
+      invoice?.status,
+      invoice?.status?.name,
+      invoice?.state,
+      invoice?.document_status,
+      invoice?.type?.name,
+      invoice?.type?.code,
+      invoice?.document?.name,
+      invoice?.document?.code,
+    ]
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
+      .join(' ');
+
+    return /nota\s*credito|credit\s*note|anulad|cancel|void/.test(status);
+  }
+
+  private isDianPendingToSend(invoice: any): boolean {
+    // Siigo puede devolver el estado como texto u objeto, según el endpoint.
+    // Se revisan los campos de estado de facturación electrónica conocidos sin
+    // depender de una única forma de respuesta.
+    const statusValues = [
+      invoice?.status,
+      invoice?.state,
+      invoice?.document_status,
+      invoice?.electronic_invoice_status,
+      invoice?.electronic_document_status,
+      invoice?.dian_status,
+      invoice?.stamp?.status,
+      invoice?.electronic_invoice?.status,
+      invoice?.electronic_document?.status,
+    ];
+
+    const statusText = statusValues
+      .flatMap((value) => {
+        if (value && typeof value === 'object') {
+          return [value.name, value.description, value.status, value.state, value.code];
+        }
+        return [value];
+      })
+      .filter(Boolean)
+      .map((value) => String(value).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, ''))
+      .join(' ');
+
+    return /dian\s+sin\s+enviar|sin\s+enviar\s+(a\s+la\s+)?dian/.test(statusText);
   }
 
   private mapToInternalInvoice(siigo: any, realClientName: string, customer: any): Invoice {
